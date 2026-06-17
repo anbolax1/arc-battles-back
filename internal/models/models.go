@@ -181,8 +181,8 @@ type LiveComplication struct {
 	Who       string `json:"who,omitempty"` // к кому применяется (имя стороны/участника)
 	Text      string `json:"text"`
 	Penalty   int    `json:"penalty"`
-	ValueType string `json:"valueType"`     // fixed | percent
-	Times     int    `json:"times"`         // сколько раз нарушено в текущем раунде (0 — не нарушено)
+	ValueType string `json:"valueType"` // fixed | percent
+	Times     int    `json:"times"`     // сколько раз нарушено в текущем раунде (0 — не нарушено)
 }
 
 // LiveStanding — сторона матча в оверлее с СУММАРНЫМИ очками (по всем раундам).
