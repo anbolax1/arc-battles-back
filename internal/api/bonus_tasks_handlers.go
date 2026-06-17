@@ -51,7 +51,8 @@ func (s *Server) handleAdjustBonusCount(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var b struct {
-		Delta int `json:"delta"`
+		Delta   int    `json:"delta"`
+		RoundID string `json:"roundId"`
 	}
 	if err := readJSON(r, &b); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
@@ -60,7 +61,8 @@ func (s *Server) handleAdjustBonusCount(w http.ResponseWriter, r *http.Request) 
 	if b.Delta == 0 {
 		b.Delta = 1
 	}
-	pid, times, err := s.Store.AdjustBonusTaskCount(r.Context(), chi.URLParam(r, "id"), b.Delta)
+	// При зачёте (delta>0) задание «переезжает» на раунд, где его зачли по факту.
+	pid, times, err := s.Store.AdjustBonusTaskCount(r.Context(), chi.URLParam(r, "id"), b.Delta, b.RoundID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "бонусное задание не найдено")
 		return

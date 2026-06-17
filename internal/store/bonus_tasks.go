@@ -72,11 +72,17 @@ func (s *Store) AssignBonusTask(ctx context.Context, roundID, participantID, tas
 }
 
 // AdjustBonusTaskCount меняет счётчик зачётов бонусного задания на delta (clamp ≥0).
-// times=0 → не выполнено (переносится). Возвращает participantID и новый times.
-func (s *Store) AdjustBonusTaskCount(ctx context.Context, id string, delta int) (participantID string, newTimes int, err error) {
+// times=0 → не выполнено (переносится). При зачёте (delta>0) с непустым roundID задание
+// «переезжает» на этот раунд — чтобы перенесённое засчитывалось там, где зачтено по факту,
+// а не в раунде добавления. Возвращает participantID и новый times.
+func (s *Store) AdjustBonusTaskCount(ctx context.Context, id string, delta int, roundID string) (participantID string, newTimes int, err error) {
 	err = s.Pool.QueryRow(ctx,
-		`UPDATE round_bonus_tasks SET times = GREATEST(times + $2, 0) WHERE id = $1 RETURNING participant_id, times`,
-		id, delta).Scan(&participantID, &newTimes)
+		`UPDATE round_bonus_tasks
+		   SET times = GREATEST(times + $2, 0),
+		       round_id = CASE WHEN $2 > 0 AND $3 <> '' THEN $3 ELSE round_id END
+		 WHERE id = $1
+		 RETURNING participant_id, times`,
+		id, delta, roundID).Scan(&participantID, &newTimes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", 0, ErrNotFound
 	}

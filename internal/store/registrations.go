@@ -94,6 +94,43 @@ func (s *Store) ListPool(ctx context.Context) ([]models.Registration, error) {
 	return out, rows.Err()
 }
 
+// ListPoolPage — страница открытых заявок (пагинация для бесконечной подгрузки).
+// total — сколько всего pending-заявок (для индикатора «загружено N из total»).
+func (s *Store) ListPoolPage(ctx context.Context, limit, offset int) ([]models.Registration, int, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 30
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	const q = `
+		SELECT r.id, r.tournament_id, r.user_id, r.embark_id, r.status, r.note, r.created_at, r.decided_at,
+		       u.login, u.display_name, u.avatar_url,
+		       COUNT(*) OVER() AS total
+		FROM registrations r
+		JOIN users u ON u.id = r.user_id
+		WHERE r.status = 'pending'
+		ORDER BY r.created_at ASC
+		LIMIT $1 OFFSET $2`
+	rows, err := s.Pool.Query(ctx, q, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := []models.Registration{}
+	total := 0
+	for rows.Next() {
+		var r models.Registration
+		if err := rows.Scan(&r.ID, &r.TournamentID, &r.UserID, &r.EmbarkID, &r.Status, &r.Note,
+			&r.CreatedAt, &r.DecidedAt, &r.UserLogin, &r.UserDisplayName, &r.UserAvatarURL, &total); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, r)
+	}
+	return out, total, rows.Err()
+}
+
 // MarkRegistrationPlaced — игрок поставлен в турнир: заявка принята и уходит из пула.
 // No-op, если у пользователя нет открытой заявки.
 func (s *Store) MarkRegistrationPlaced(ctx context.Context, userID, tournamentID string) error {
