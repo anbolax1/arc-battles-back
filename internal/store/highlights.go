@@ -81,19 +81,24 @@ func (s *Store) SetHighlightFailed(ctx context.Context, id, reason string) error
 }
 
 // ListApprovedHighlights — публичный список одобренных, с фильтрами и пагинацией.
-func (s *Store) ListApprovedHighlights(ctx context.Context, tournamentID, userID string, limit, offset int) ([]models.Highlight, int, error) {
+// random=true — случайная выборка (для блока «лучшие моменты» на главной).
+func (s *Store) ListApprovedHighlights(ctx context.Context, tournamentID, userID string, limit, offset int, random bool) ([]models.Highlight, int, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 24
 	}
 	if offset < 0 {
 		offset = 0
 	}
+	orderBy := "h.created_at DESC"
+	if random {
+		orderBy = "random()"
+	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT `+hCols+`, COUNT(*) OVER() AS total `+hFrom+`
 		WHERE h.status = 'approved'
 		  AND ($1 = '' OR h.tournament_id = $1)
 		  AND ($2 = '' OR h.user_id = $2)
-		ORDER BY h.created_at DESC
+		ORDER BY `+orderBy+`
 		LIMIT $3 OFFSET $4`, tournamentID, userID, limit, offset)
 	if err != nil {
 		return nil, 0, err

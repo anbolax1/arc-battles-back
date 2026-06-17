@@ -127,8 +127,9 @@ func (s *Server) createHighlightUpload(w http.ResponseWriter, r *http.Request, u
 func (s *Server) handleListHighlights(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	random := r.URL.Query().Get("random") == "1" || r.URL.Query().Get("random") == "true"
 	items, total, err := s.Store.ListApprovedHighlights(r.Context(),
-		r.URL.Query().Get("tournamentId"), r.URL.Query().Get("userId"), limit, offset)
+		r.URL.Query().Get("tournamentId"), r.URL.Query().Get("userId"), limit, offset, random)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
