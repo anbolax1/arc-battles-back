@@ -11,7 +11,7 @@ import (
 
 const hCols = `h.id, h.user_id, u.login, u.display_name, u.avatar_url,
 	h.tournament_id, COALESCE(t.title, ''), h.title, h.source, h.source_url,
-	h.file_path, h.thumb_path, h.duration, h.status, h.reject_reason, h.created_at`
+	h.file_path, h.thumb_path, h.preview_path, h.duration, h.status, h.reject_reason, h.created_at`
 
 const hFrom = `FROM highlights h
 	JOIN users u ON u.id = h.user_id
@@ -21,10 +21,10 @@ const hFrom = `FROM highlights h
 func scanHighlight(row pgx.Row, total *int) (models.Highlight, error) {
 	var h models.Highlight
 	var tournamentID *string
-	var filePath, thumbPath string
+	var filePath, thumbPath, previewPath string
 	dest := []any{&h.ID, &h.UserID, &h.UserLogin, &h.UserName, &h.UserAvatarURL,
 		&tournamentID, &h.TournamentTitle, &h.Title, &h.Source, &h.SourceURL,
-		&filePath, &thumbPath, &h.Duration, &h.Status, &h.RejectReason, &h.CreatedAt}
+		&filePath, &thumbPath, &previewPath, &h.Duration, &h.Status, &h.RejectReason, &h.CreatedAt}
 	if total != nil {
 		dest = append(dest, total)
 	}
@@ -37,6 +37,9 @@ func scanHighlight(row pgx.Row, total *int) (models.Highlight, error) {
 	}
 	if thumbPath != "" {
 		h.ThumbURL = "/media/" + thumbPath
+	}
+	if previewPath != "" {
+		h.PreviewURL = "/media/" + previewPath
 	}
 	return h, nil
 }
@@ -66,10 +69,10 @@ func (s *Store) GetHighlight(ctx context.Context, id string) (models.Highlight, 
 }
 
 // SetHighlightProcessed — клип докачан: проставляем пути/длительность и статус 'pending'.
-func (s *Store) SetHighlightProcessed(ctx context.Context, id, filePath, thumbPath string, duration int) error {
+func (s *Store) SetHighlightProcessed(ctx context.Context, id, filePath, thumbPath, previewPath string, duration int) error {
 	_, err := s.Pool.Exec(ctx,
-		`UPDATE highlights SET file_path = $2, thumb_path = $3, duration = $4, status = 'pending' WHERE id = $1`,
-		id, filePath, thumbPath, duration)
+		`UPDATE highlights SET file_path = $2, thumb_path = $3, preview_path = $4, duration = $5, status = 'pending' WHERE id = $1`,
+		id, filePath, thumbPath, previewPath, duration)
 	return err
 }
 
@@ -165,11 +168,12 @@ func (s *Store) ModerateHighlight(ctx context.Context, id, reviewerID string, ap
 }
 
 // DeleteHighlight удаляет запись и возвращает пути файлов для зачистки в хранилище.
-func (s *Store) DeleteHighlight(ctx context.Context, id string) (filePath, thumbPath string, err error) {
+func (s *Store) DeleteHighlight(ctx context.Context, id string) (filePath, thumbPath, previewPath string, err error) {
 	err = s.Pool.QueryRow(ctx,
-		`DELETE FROM highlights WHERE id = $1 RETURNING file_path, thumb_path`, id).Scan(&filePath, &thumbPath)
+		`DELETE FROM highlights WHERE id = $1 RETURNING file_path, thumb_path, preview_path`, id).
+		Scan(&filePath, &thumbPath, &previewPath)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", ErrNotFound
+		return "", "", "", ErrNotFound
 	}
-	return filePath, thumbPath, err
+	return filePath, thumbPath, previewPath, err
 }

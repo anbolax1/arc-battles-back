@@ -137,6 +137,7 @@ type Highlight struct {
 	SourceURL       string    `json:"sourceUrl,omitempty"`
 	VideoURL        string    `json:"videoUrl,omitempty"`
 	ThumbURL        string    `json:"thumbUrl,omitempty"`
+	PreviewURL      string    `json:"previewUrl,omitempty"` // лёгкое превью для автоплея в «стене»
 	Duration        int       `json:"duration"`
 	Status          string    `json:"status"` // processing|pending|approved|rejected|failed
 	RejectReason    string    `json:"rejectReason,omitempty"`

@@ -68,13 +68,13 @@ func (s *Server) handleCreateHighlight(w http.ResponseWriter, r *http.Request) {
 
 	// Скачиваем клип в фоне (своим контекстом — запрос уже завершится).
 	go func(id, url string) {
-		file, thumb, dur, derr := s.Media.DownloadClip(context.Background(), id, url)
+		file, thumb, preview, dur, derr := s.Media.DownloadClip(context.Background(), id, url)
 		if derr != nil {
 			log.Printf("highlight %s: скачивание клипа не удалось: %v", id, derr)
 			_ = s.Store.SetHighlightFailed(context.Background(), id, "не удалось скачать клип")
 			return
 		}
-		if e := s.Store.SetHighlightProcessed(context.Background(), id, file, thumb, dur); e != nil {
+		if e := s.Store.SetHighlightProcessed(context.Background(), id, file, thumb, preview, dur); e != nil {
 			log.Printf("highlight %s: сохранение результата: %v", id, e)
 		}
 	}(h.ID, clipURL)
@@ -109,13 +109,13 @@ func (s *Server) createHighlightUpload(w http.ResponseWriter, r *http.Request, u
 		writeError(w, http.StatusBadRequest, "не удалось создать хайлайт: "+err.Error())
 		return
 	}
-	fpath, thumb, dur, serr := s.Media.SaveUpload(r.Context(), h.ID, file)
+	fpath, thumb, preview, dur, serr := s.Media.SaveUpload(r.Context(), h.ID, file)
 	if serr != nil {
 		_ = s.Store.SetHighlightFailed(r.Context(), h.ID, "не удалось сохранить файл")
 		writeError(w, http.StatusInternalServerError, "не удалось сохранить файл")
 		return
 	}
-	if e := s.Store.SetHighlightProcessed(r.Context(), h.ID, fpath, thumb, dur); e != nil {
+	if e := s.Store.SetHighlightProcessed(r.Context(), h.ID, fpath, thumb, preview, dur); e != nil {
 		writeError(w, http.StatusInternalServerError, e.Error())
 		return
 	}
@@ -182,7 +182,7 @@ func (s *Server) handleModerateHighlight(w http.ResponseWriter, r *http.Request)
 
 // DELETE /api/highlights/{id} — удалить хайлайт и его файлы. Organizer-only.
 func (s *Server) handleDeleteHighlight(w http.ResponseWriter, r *http.Request) {
-	file, thumb, err := s.Store.DeleteHighlight(r.Context(), chi.URLParam(r, "id"))
+	file, thumb, preview, err := s.Store.DeleteHighlight(r.Context(), chi.URLParam(r, "id"))
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "хайлайт не найден")
 		return
@@ -191,7 +191,7 @@ func (s *Server) handleDeleteHighlight(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.Media.Remove(file, thumb)
+	s.Media.Remove(file, thumb, preview)
 	w.WriteHeader(http.StatusNoContent)
 }
 
