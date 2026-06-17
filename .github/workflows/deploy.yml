@@ -1,10 +1,10 @@
 name: Deploy backend
 
 # Автодеплой: сборка статического бинаря на раннере → заливка на VPS → рестарт.
-# Миграции БД прогоняются бинарём на старте. Требуются секреты репозитория:
+# Миграции БД прогоняются бинарём на старте. Секреты репозитория:
 #   SSH_HOST  — IP/домен VPS (напр. 155.212.133.147)
 #   SSH_USER  — admin2
-#   SSH_KEY   — приватный deploy-ключ (целиком, включая BEGIN/END строки)
+#   SSH_KEY   — приватный deploy-ключ (целиком, с BEGIN/END)
 
 on:
   push:
@@ -28,22 +28,21 @@ jobs:
       - name: Build linux binary
         run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o server-linux.new ./cmd/server
 
-      - name: Upload binary (alongside running one)
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          source: server-linux.new
-          target: back
-
-      - name: Swap & restart (migrations run on startup)
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          script: |
+      - name: Deploy over SSH (migrations run on startup)
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" | tr -d '\r' > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          echo "deploy key fingerprint: $(ssh-keygen -yf ~/.ssh/id | awk '{print $1" "substr($2,1,24)"..."}')"
+          SSH="ssh -i ~/.ssh/id -o StrictHostKeyChecking=accept-new"
+          scp -i ~/.ssh/id -o StrictHostKeyChecking=accept-new server-linux.new "$SSH_USER@$SSH_HOST:back/"
+          $SSH "$SSH_USER@$SSH_HOST" '
             set -e
             export XDG_RUNTIME_DIR=/run/user/$(id -u)
             chmod +x ~/back/server-linux.new
@@ -53,3 +52,4 @@ jobs:
             curl -fsS localhost:8080/api/health
             echo
             journalctl --user -u respect-back -n 10 --no-pager | grep -iE "goose|migrat|version" || true
+          '
