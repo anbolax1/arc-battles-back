@@ -9,24 +9,26 @@ import (
 )
 
 // handleRegister — подача заявки в общий пул (без привязки к турниру).
+// Embark ID берём из профиля пользователя (он редактируется в кабинете и почти не
+// меняется), а не из тела заявки. Без заполненного Embark ID заявку не принимаем.
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
 	var body struct {
-		EmbarkID string `json:"embarkId"`
-		Note     string `json:"note"`
+		Note string `json:"note"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	embark := strings.TrimSpace(body.EmbarkID)
+	embark := strings.TrimSpace(u.EmbarkID)
+	if embark == "" {
+		writeError(w, http.StatusBadRequest, "сначала укажите Embark ID в профиле")
+		return
+	}
 	reg, err := s.Store.CreateRegistration(r.Context(), u.ID, embark, strings.TrimSpace(body.Note))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if embark != "" {
-		_, _ = s.Store.UpdateEmbarkID(r.Context(), u.ID, embark)
 	}
 	writeJSON(w, http.StatusCreated, reg)
 }

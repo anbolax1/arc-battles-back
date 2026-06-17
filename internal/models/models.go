@@ -121,6 +121,17 @@ type PlayerProfile struct {
 	History     []PlayerHistoryItem `json:"history"`
 }
 
+// UserOverview — пользователь + агрегаты участия для раздела «Пользователи» в кабинете.
+// Email раскрываем только здесь (организатору); в публичной модели User он скрыт (json:"-").
+type UserOverview struct {
+	User
+	Email          string `json:"email"`
+	Tournaments    int    `json:"tournaments"`    // завершённых турниров
+	Wins           int    `json:"wins"`           // побед в завершённых
+	Points         int    `json:"points"`         // суммарные очки в завершённых
+	Participations int    `json:"participations"` // всего участий (включая текущие/анонсы)
+}
+
 // Тип числового значения задания/усложнения.
 const (
 	ValueFixed   = "fixed"   // фиксированное число баллов

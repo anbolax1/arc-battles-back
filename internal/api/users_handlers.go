@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/battle-for-respect/backend/internal/store"
@@ -18,6 +19,20 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, users)
+}
+
+// GET /api/users/overview?limit&offset&q&sort — пользователи с агрегатами участия,
+// постранично. Organizer-only. В отличие от /users, отдаёт email и статистику участия.
+func (s *Server) handleListUsersOverview(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	items, total, err := s.Store.ListUsersOverview(r.Context(), limit, offset,
+		r.URL.Query().Get("q"), r.URL.Query().Get("sort"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
 // GET /api/players/{login} — публичный профиль игрока: user + сезон-статы + история (B6).

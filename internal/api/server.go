@@ -76,6 +76,7 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/participants/{id}", s.handleUpdateParticipant)
 			r.Delete("/participants/{id}", s.handleRemoveParticipant)
 			r.Get("/users", s.handleListUsers)
+			r.Get("/users/overview", s.handleListUsersOverview)
 			r.Get("/registrations/pool", s.handleListPool)
 			r.Get("/registrations/pool/page", s.handleListPoolPage)
 			r.Post("/registrations/{id}/decide", s.handleDecideRegistration)

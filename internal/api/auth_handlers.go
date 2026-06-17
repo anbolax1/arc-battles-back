@@ -113,5 +113,7 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "не удалось обновить профиль")
 		return
 	}
+	// Держим пул актуальным: подтягиваем новый Embark ID в незакрытую заявку игрока.
+	_ = s.Store.SyncPendingRegistrationEmbark(r.Context(), u.ID, updated.EmbarkID)
 	writeJSON(w, http.StatusOK, updated)
 }

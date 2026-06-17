@@ -131,6 +131,16 @@ func (s *Store) ListPoolPage(ctx context.Context, limit, offset int) ([]models.R
 	return out, total, rows.Err()
 }
 
+// SyncPendingRegistrationEmbark — обновляет Embark ID в незакрытой (pending) заявке игрока,
+// чтобы пул показывал актуальный ID после смены его в профиле. У принятых/отклонённых
+// заявок остаётся снимок на момент решения.
+func (s *Store) SyncPendingRegistrationEmbark(ctx context.Context, userID, embark string) error {
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE registrations SET embark_id = $2 WHERE user_id = $1 AND status = 'pending'`,
+		userID, embark)
+	return err
+}
+
 // MarkRegistrationPlaced — игрок поставлен в турнир: заявка принята и уходит из пула.
 // No-op, если у пользователя нет открытой заявки.
 func (s *Store) MarkRegistrationPlaced(ctx context.Context, userID, tournamentID string) error {
