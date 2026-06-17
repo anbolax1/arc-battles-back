@@ -18,6 +18,12 @@ type Config struct {
 	CookieDomain       string
 	CookieSecure       bool
 	OrganizerLogins    []string
+
+	// Хайлайты: каталог для видео/превью и внешние утилиты для обработки клипов.
+	MediaDir    string
+	YtDlpPath   string
+	FfmpegPath  string
+	FfprobePath string
 }
 
 // Load читает .env (если есть) и собирает конфиг из окружения.
@@ -34,6 +40,10 @@ func Load() Config {
 		FrontendURL:        env("FRONTEND_URL", "http://localhost:3000"),
 		CookieDomain:       env("COOKIE_DOMAIN", ""),
 		CookieSecure:       env("COOKIE_SECURE", "false") == "true",
+		MediaDir:           env("MEDIA_DIR", "./media"),
+		YtDlpPath:          env("YTDLP_PATH", "yt-dlp"),
+		FfmpegPath:         env("FFMPEG_PATH", "ffmpeg"),
+		FfprobePath:        env("FFPROBE_PATH", "ffprobe"),
 	}
 
 	for _, l := range strings.Split(env("ORGANIZER_TWITCH_LOGINS", ""), ",") {

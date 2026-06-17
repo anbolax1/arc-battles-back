@@ -121,6 +121,28 @@ type PlayerProfile struct {
 	History     []PlayerHistoryItem `json:"history"`
 }
 
+// Highlight — пользовательский хайлайт (твич-клип, скачанный к нам, или загруженный файл).
+// Публикуется после модерации (status='approved'). videoUrl/thumbUrl — готовые ссылки для
+// фронта (формируются из file_path/thumb_path). Поля User* — данные автора для карточки.
+type Highlight struct {
+	ID              string    `json:"id"`
+	UserID          string    `json:"userId"`
+	UserLogin       string    `json:"userLogin"`
+	UserName        string    `json:"userName"`
+	UserAvatarURL   string    `json:"userAvatarUrl"`
+	TournamentID    *string   `json:"tournamentId,omitempty"`
+	TournamentTitle string    `json:"tournamentTitle,omitempty"`
+	Title           string    `json:"title"`
+	Source          string    `json:"source"` // twitch_clip | upload
+	SourceURL       string    `json:"sourceUrl,omitempty"`
+	VideoURL        string    `json:"videoUrl,omitempty"`
+	ThumbURL        string    `json:"thumbUrl,omitempty"`
+	Duration        int       `json:"duration"`
+	Status          string    `json:"status"` // processing|pending|approved|rejected|failed
+	RejectReason    string    `json:"rejectReason,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
 // UserOverview — пользователь + агрегаты участия для раздела «Пользователи» в кабинете.
 // Email раскрываем только здесь (организатору); в публичной модели User он скрыт (json:"-").
 type UserOverview struct {

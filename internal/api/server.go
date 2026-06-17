@@ -5,6 +5,7 @@ import (
 
 	"github.com/battle-for-respect/backend/internal/auth"
 	"github.com/battle-for-respect/backend/internal/config"
+	"github.com/battle-for-respect/backend/internal/media"
 	"github.com/battle-for-respect/backend/internal/store"
 	"github.com/battle-for-respect/backend/internal/ws"
 	"github.com/go-chi/chi/v5"
@@ -16,6 +17,7 @@ type Server struct {
 	Cfg   config.Config
 	Store *store.Store
 	Hub   *ws.Hub
+	Media *media.Processor
 	OAuth *oauth2.Config
 }
 
@@ -24,6 +26,7 @@ func New(cfg config.Config, st *store.Store, hub *ws.Hub) *Server {
 		Cfg:   cfg,
 		Store: st,
 		Hub:   hub,
+		Media: media.NewProcessor(cfg.MediaDir, cfg.YtDlpPath, cfg.FfmpegPath, cfg.FfprobePath),
 		OAuth: auth.TwitchOAuth(cfg.TwitchClientID, cfg.TwitchClientSecret, cfg.TwitchRedirectURL),
 	}
 }
@@ -53,6 +56,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/rules", s.handleRules)
 		r.Get("/overlay/state", s.handleGetOverlayState)
 		r.Get("/ws/overlay", s.handleOverlayWS)
+		r.Get("/highlights", s.handleListHighlights)
+		r.Get("/media/*", s.handleServeMedia)
 
 		// --- Authenticated user ---
 		r.Group(func(r chi.Router) {
@@ -61,6 +66,7 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/me", s.handleUpdateMe)
 			r.Get("/me/registrations", s.handleMyRegistrations)
 			r.Post("/registrations", s.handleRegister)
+			r.Post("/highlights", s.handleCreateHighlight)
 		})
 
 		// --- Organizer only ---
@@ -109,6 +115,11 @@ func (s *Server) Router() http.Handler {
 			r.Post("/rounds/{id}/bonus-tasks", s.handleAssignBonusTask)
 			r.Post("/round-bonus-tasks/{id}/count", s.handleAdjustBonusCount)
 			r.Delete("/round-bonus-tasks/{id}", s.handleRemoveBonusTask)
+
+			// Хайлайты: модерация (очередь, одобрить/отклонить, удалить).
+			r.Get("/highlights/moderation", s.handleListHighlightsModeration)
+			r.Post("/highlights/{id}/moderate", s.handleModerateHighlight)
+			r.Delete("/highlights/{id}", s.handleDeleteHighlight)
 		})
 	})
 
