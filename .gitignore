@@ -1,0 +1,6 @@
+.env
+/server
+/server.exe
+/server-linux
+*.exe
+/tmp/
