@@ -23,7 +23,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// maxJSONBody — потолок тела JSON-запроса (анти-DoS: не читаем гигабайты в память).
+const maxJSONBody = 1 << 20 // 1 MiB
+
 func readJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(dst)
+	return json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxJSONBody)).Decode(dst)
 }

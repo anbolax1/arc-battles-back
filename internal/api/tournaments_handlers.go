@@ -139,18 +139,15 @@ func (s *Server) handleAddParticipant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Если игрока поставили из заявки — заявка принята и уходит из пула; зритель → участник.
+	// Если игрока поставили из заявки — заявка принята и уходит из пула.
 	// Для 2x2 проверяем и капитана (UserID), и аккаунты в составе команды (members).
 	for _, uid := range participantUserIDs(body.UserID, body.Members) {
 		_ = s.Store.MarkRegistrationPlaced(r.Context(), uid, id)
-		if u, err := s.Store.GetUser(r.Context(), uid); err == nil && u.Role == models.RoleViewer {
-			_ = s.Store.SetRole(r.Context(), uid, models.RoleParticipant)
-		}
 	}
 	writeJSON(w, http.StatusCreated, p)
 }
 
-// participantUserIDs собирает twitch-аккаунты, связанные с участником: одиночный
+// participantUserIDs собирает аккаунты, связанные с участником: одиночный
 // userId плюс userId членов команды из members (для 2x2).
 func participantUserIDs(userID *string, members json.RawMessage) []string {
 	out := []string{}

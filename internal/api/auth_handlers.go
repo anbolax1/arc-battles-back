@@ -1,92 +1,179 @@
 package api
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"errors"
+	"net"
 	"net/http"
-	"time"
+	"regexp"
+	"strings"
 
 	"github.com/battle-for-respect/backend/internal/auth"
 	"github.com/battle-for-respect/backend/internal/models"
+	"github.com/battle-for-respect/backend/internal/store"
 )
 
-func randomState() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
+// loginRe — допустимый логин: латиница, цифры и подчёркивание, 3–32 символа.
+// Узкий набор исключает пробелы, омоглифы и спецсимволы (меньше путаницы и сюрпризов).
+var loginRe = regexp.MustCompile(`^[A-Za-z0-9_]{3,32}$`)
+
+const minPasswordLen = 8
+
+type credentials struct {
+	Login    string `json:"login"`
+	Password string `json:"password"`
 }
 
-func (s *Server) handleTwitchLogin(w http.ResponseWriter, r *http.Request) {
-	if s.Cfg.TwitchClientID == "" {
-		writeError(w, http.StatusInternalServerError, "Twitch OAuth не настроен (TWITCH_CLIENT_ID)")
-		return
-	}
-	state, err := randomState()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "не удалось сгенерировать OAuth state")
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookie,
-		Value:    state,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.Cfg.CookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int((10 * time.Minute).Seconds()),
-	})
-	http.Redirect(w, r, s.OAuth.AuthCodeURL(state), http.StatusFound)
-}
-
-func (s *Server) handleTwitchCallback(w http.ResponseWriter, r *http.Request) {
-	stateC, err := r.Cookie(stateCookie)
-	if err != nil || stateC.Value == "" || stateC.Value != r.URL.Query().Get("state") {
-		writeError(w, http.StatusBadRequest, "неверный OAuth state")
-		return
-	}
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		writeError(w, http.StatusBadRequest, "отсутствует code")
-		return
-	}
-
-	token, err := s.OAuth.Exchange(r.Context(), code)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "не удалось обменять код Twitch")
-		return
-	}
-	tu, err := auth.FetchTwitchUser(r.Context(), s.Cfg.TwitchClientID, token.AccessToken)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "не удалось получить профиль Twitch")
-		return
-	}
-
-	defaultRole := models.RoleViewer
-	if s.Cfg.IsOrganizerLogin(tu.Login) {
-		defaultRole = models.RoleOrganizer
-	}
-
-	u, err := s.Store.UpsertTwitchUser(r.Context(), tu.ID, tu.Login, tu.DisplayName, tu.ProfileImageURL, tu.Email, defaultRole)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "не удалось сохранить пользователя")
-		return
-	}
-	// Доводим роль до organizer для бутстрап-логинов, даже если пользователь уже существовал.
-	if s.Cfg.IsOrganizerLogin(tu.Login) && u.Role != models.RoleOrganizer {
-		if err := s.Store.SetRole(r.Context(), u.ID, models.RoleOrganizer); err == nil {
-			u.Role = models.RoleOrganizer
+// clientIP возвращает IP клиента — ключ троттлинга. НЕ доверяем произвольным заголовкам
+// (True-Client-IP, клиентский X-Forwarded-For легко подделать). За доверенным прокси
+// (TRUST_PROXY=true) берём X-Real-IP, который nginx ставит из $remote_addr; иначе — реальный
+// адрес TCP-соединения r.RemoteAddr.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.Cfg.TrustProxy {
+		if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
+			return xr
 		}
 	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
 
-	jwtToken, err := auth.IssueToken(s.Cfg.JWTSecret, u.ID, string(u.Role), sessionTTL)
+// validateCredentials проверяет формат логина/пароля. Возвращает нормализованный
+// логин и человекочитаемую ошибку (пустая строка — всё ок).
+func validateCredentials(c credentials) (login string, msg string) {
+	login = strings.TrimSpace(c.Login)
+	if !loginRe.MatchString(login) {
+		return "", "логин: 3–32 символа, латиница, цифры и подчёркивание"
+	}
+	if len(c.Password) < minPasswordLen {
+		return "", "пароль должен быть не короче 8 символов"
+	}
+	if len(c.Password) > auth.MaxPasswordBytes {
+		return "", "пароль слишком длинный (не более 72 байт)"
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Password), login) {
+		return "", "пароль не должен совпадать с логином"
+	}
+	return login, ""
+}
+
+// handleSignup — регистрация по логину/паролю. Создаёт пользователя, сразу заводит
+// сессию (httpOnly-cookie) и возвращает профиль. Логин в ORGANIZER_LOGINS получает
+// роль organizer. Троттлинг по IP против массового создания аккаунтов.
+func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
+	ip := s.clientIP(r)
+	if s.registerLimiter.blocked(ip) {
+		writeError(w, http.StatusTooManyRequests, "слишком много регистраций, попробуйте позже")
+		return
+	}
+
+	var body credentials
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	login, msg := validateCredentials(body)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	hash, err := auth.HashPassword(body.Password)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось обработать пароль")
+		return
+	}
+
+	// Открытая регистрация всегда создаёт обычного пользователя. Роль superadmin выдаётся
+	// только бутстрапом организатора при старте и затем — другим организатором вручную
+	// (PATCH /users/{id}/role). Никакого самоназначения роли по совпадению логина.
+	role := models.DefaultRole
+
+	// Каждая попытка (даже неудачная) считается — иначе лимит легко обойти перебором занятых логинов.
+	s.registerLimiter.inc(ip)
+
+	u, err := s.Store.CreateUser(r.Context(), login, login, hash, role)
+	if errors.Is(err, store.ErrLoginTaken) {
+		writeError(w, http.StatusConflict, "логин уже занят")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось создать пользователя")
+		return
+	}
+
+	token, err := auth.IssueToken(s.Cfg.JWTSecret, u.ID, string(u.Role), sessionTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "не удалось создать сессию")
 		return
 	}
-	s.setSessionCookie(w, jwtToken)
-	http.Redirect(w, r, s.Cfg.FrontendURL, http.StatusFound)
+	s.setSessionCookie(w, token)
+	writeJSON(w, http.StatusCreated, u)
+}
+
+// handleLogin — вход по логину/паролю. На неверные данные отвечает одинаково
+// («неверный логин или пароль») и тратит время bcrypt даже при отсутствии пользователя,
+// чтобы не раскрывать существование логина. Троттлинг по IP и по логину против перебора.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	ip := s.clientIP(r)
+	if s.loginIPLimiter.blocked(ip) {
+		writeError(w, http.StatusTooManyRequests, "слишком много попыток входа, попробуйте позже")
+		return
+	}
+	s.loginIPLimiter.inc(ip)
+
+	var body credentials
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	login := strings.TrimSpace(body.Login)
+	if login == "" || body.Password == "" {
+		writeError(w, http.StatusBadRequest, "укажите логин и пароль")
+		return
+	}
+
+	loginKey := strings.ToLower(login)
+	if s.loginUserLimiter.blocked(loginKey) {
+		writeError(w, http.StatusTooManyRequests, "слишком много попыток входа, попробуйте позже")
+		return
+	}
+
+	id, role, hash, err := s.Store.GetUserAuthByLogin(r.Context(), login)
+	if errors.Is(err, store.ErrNotFound) {
+		// Сравниваем с фиктивным хешем, чтобы время ответа не выдавало отсутствие логина.
+		auth.CheckPassword(s.dummyHash, body.Password)
+		s.loginUserLimiter.inc(loginKey)
+		writeError(w, http.StatusUnauthorized, "неверный логин или пароль")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось выполнить вход")
+		return
+	}
+	if !auth.CheckPassword(hash, body.Password) {
+		s.loginUserLimiter.inc(loginKey)
+		writeError(w, http.StatusUnauthorized, "неверный логин или пароль")
+		return
+	}
+
+	// Успех — сбрасываем счётчик неудач по логину.
+	s.loginUserLimiter.reset(loginKey)
+
+	token, err := auth.IssueToken(s.Cfg.JWTSecret, id, string(role), sessionTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось создать сессию")
+		return
+	}
+	s.setSessionCookie(w, token)
+
+	u, err := s.Store.GetUser(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось загрузить профиль")
+		return
+	}
+	writeJSON(w, http.StatusOK, u)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +182,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Сдвигаем эпоху сессий — текущий (и любой ранее выпущенный) токен становится недействителен
+	// на сервере, а не только удаляется cookie в браузере.
+	if u, ok := userFrom(r.Context()); ok {
+		_ = s.Store.RevokeSessions(r.Context(), u.ID)
+	}
 	s.clearSessionCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }

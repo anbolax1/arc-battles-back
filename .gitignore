@@ -3,5 +3,6 @@
 /server.exe
 /server-linux
 *.exe
+*.log
 /tmp/
 /media/

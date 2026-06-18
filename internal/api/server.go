@@ -2,15 +2,16 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/auth"
 	"github.com/battle-for-respect/backend/internal/config"
 	"github.com/battle-for-respect/backend/internal/media"
+	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/battle-for-respect/backend/internal/store"
 	"github.com/battle-for-respect/backend/internal/ws"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"golang.org/x/oauth2"
 )
 
 type Server struct {
@@ -18,16 +19,28 @@ type Server struct {
 	Store *store.Store
 	Hub   *ws.Hub
 	Media *media.Processor
-	OAuth *oauth2.Config
+
+	// dummyHash — фиктивный bcrypt-хеш для выравнивания времени ответа на вход
+	// несуществующего логина (защита от перебора пользователей по таймингу).
+	dummyHash string
+	// Троттлинг входа/регистрации (защита от перебора паролей и спама аккаунтов).
+	loginIPLimiter   *limiter
+	loginUserLimiter *limiter
+	registerLimiter  *limiter
 }
 
 func New(cfg config.Config, st *store.Store, hub *ws.Hub) *Server {
+	// Хеш считаем один раз при старте — его значение неважно, важна постоянная стоимость сравнения.
+	dummy, _ := auth.HashPassword("placeholder-not-a-real-account-password")
 	return &Server{
-		Cfg:   cfg,
-		Store: st,
-		Hub:   hub,
-		Media: media.NewProcessor(cfg.MediaDir, cfg.YtDlpPath, cfg.FfmpegPath, cfg.FfprobePath),
-		OAuth: auth.TwitchOAuth(cfg.TwitchClientID, cfg.TwitchClientSecret, cfg.TwitchRedirectURL),
+		Cfg:              cfg,
+		Store:            st,
+		Hub:              hub,
+		Media:            media.NewProcessor(cfg.MediaDir, cfg.YtDlpPath, cfg.FfmpegPath, cfg.FfprobePath),
+		dummyHash:        dummy,
+		loginIPLimiter:   newLimiter(15, 5*time.Minute), // грубый предохранитель против долбёжки с одного IP
+		loginUserLimiter: newLimiter(8, 15*time.Minute), // против перебора пароля к конкретному логину
+		registerLimiter:  newLimiter(6, time.Hour),      // против массовой регистрации с одного IP
 	}
 }
 
@@ -43,9 +56,9 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/health", s.handleHealth)
 
-		// --- Auth ---
-		r.Get("/auth/twitch/login", s.handleTwitchLogin)
-		r.Get("/auth/twitch/callback", s.handleTwitchCallback)
+		// --- Auth (логин/пароль) ---
+		r.Post("/auth/register", s.handleSignup)
+		r.Post("/auth/login", s.handleLogin)
 		r.Post("/auth/logout", s.handleLogout)
 
 		// --- Public reads ---
@@ -69,9 +82,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/highlights", s.handleCreateHighlight)
 		})
 
-		// --- Organizer only ---
+		// --- Superadmin only (организатор) ---
 		r.Group(func(r chi.Router) {
-			r.Use(s.requireOrganizer)
+			r.Use(s.requireRole(models.RoleSuperadmin))
 			r.Post("/tournaments", s.handleCreateTournament)
 			r.Patch("/tournaments/{id}", s.handleUpdateTournament)
 			r.Post("/tournaments/{id}/participants", s.handleAddParticipant)
@@ -83,6 +96,7 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/participants/{id}", s.handleRemoveParticipant)
 			r.Get("/users", s.handleListUsers)
 			r.Get("/users/overview", s.handleListUsersOverview)
+			r.Patch("/users/{id}/role", s.handleSetUserRole)
 			r.Get("/registrations/pool", s.handleListPool)
 			r.Get("/registrations/pool/page", s.handleListPoolPage)
 			r.Post("/registrations/{id}/decide", s.handleDecideRegistration)

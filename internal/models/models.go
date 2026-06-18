@@ -9,14 +9,32 @@ import (
 type Role string
 
 const (
-	RoleViewer      Role = "viewer"
-	RoleParticipant Role = "participant"
-	RoleOrganizer   Role = "organizer"
+	RoleUser       Role = "user"       // обычный зарегистрированный пользователь
+	RoleSuperadmin Role = "superadmin" // организатор: полный доступ ко всему
 )
+
+// DefaultRole — роль нового аккаунта по умолчанию.
+const DefaultRole = RoleUser
+
+// roleLevels — иерархия ролей: чем больше число, тем больше прав. Роль с бóльшим
+// уровнем автоматически имеет все доступы ролей ниже. Значения разрежены (10, 100),
+// чтобы новые роли (например moderator=50) можно было вставлять между существующими.
+var roleLevels = map[Role]int{
+	RoleUser:       10,
+	RoleSuperadmin: 100,
+}
+
+// Level — числовой уровень роли (неизвестная роль → 0, ниже любой валидной).
+func (r Role) Level() int { return roleLevels[r] }
+
+// AtLeast сообщает, что роль не ниже требуемой — основа иерархической проверки доступа.
+func (r Role) AtLeast(min Role) bool { return r.Level() >= min.Level() }
+
+// Valid сообщает, известна ли роль.
+func (r Role) Valid() bool { _, ok := roleLevels[r]; return ok }
 
 type User struct {
 	ID          string    `json:"id"`
-	TwitchID    string    `json:"twitchId"`
 	Login       string    `json:"login"`
 	DisplayName string    `json:"displayName"`
 	AvatarURL   string    `json:"avatarUrl"`

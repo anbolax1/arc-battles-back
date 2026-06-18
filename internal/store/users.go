@@ -4,35 +4,100 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const userCols = `id, twitch_id, login, display_name, avatar_url, email, role, embark_id, created_at`
+const userCols = `id, login, display_name, avatar_url, email, role, embark_id, created_at`
+
+// ErrLoginTaken — логин уже занят (нарушение уникального индекса users_login_lower_key).
+var ErrLoginTaken = errors.New("логин уже занят")
 
 func scanUser(row pgx.Row) (models.User, error) {
 	var u models.User
 	var role string
-	err := row.Scan(&u.ID, &u.TwitchID, &u.Login, &u.DisplayName, &u.AvatarURL, &u.Email, &role, &u.EmbarkID, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Login, &u.DisplayName, &u.AvatarURL, &u.Email, &role, &u.EmbarkID, &u.CreatedAt)
 	u.Role = models.Role(role)
 	return u, err
 }
 
-// UpsertTwitchUser создаёт или обновляет пользователя по twitch_id.
-// Роль существующего пользователя не трогаем; defaultRole применяется только при создании.
-func (s *Store) UpsertTwitchUser(ctx context.Context, twitchID, login, displayName, avatar, email string, defaultRole models.Role) (models.User, error) {
+// CreateUser создаёт пользователя с хешем пароля. Логин уникален без учёта регистра —
+// при конфликте возвращается ErrLoginTaken.
+func (s *Store) CreateUser(ctx context.Context, login, displayName, passwordHash string, role models.Role) (models.User, error) {
 	const q = `
-		INSERT INTO users (twitch_id, login, display_name, avatar_url, email, role)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (twitch_id) DO UPDATE
-			SET login = EXCLUDED.login,
-			    display_name = EXCLUDED.display_name,
-			    avatar_url = EXCLUDED.avatar_url,
-			    email = EXCLUDED.email,
-			    updated_at = now()
+		INSERT INTO users (login, display_name, password_hash, role)
+		VALUES ($1, $2, $3, $4)
 		RETURNING ` + userCols
-	return scanUser(s.Pool.QueryRow(ctx, q, twitchID, login, displayName, avatar, email, string(defaultRole)))
+	u, err := scanUser(s.Pool.QueryRow(ctx, q, login, displayName, passwordHash, string(role)))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return models.User{}, ErrLoginTaken
+		}
+		return models.User{}, err
+	}
+	return u, nil
+}
+
+// GetUserAuthByLogin возвращает идентификатор, роль и хеш пароля по логину (без учёта
+// регистра) — для проверки пароля при входе. ErrNotFound, если пользователя нет.
+func (s *Store) GetUserAuthByLogin(ctx context.Context, login string) (id string, role models.Role, passwordHash string, err error) {
+	var r string
+	err = s.Pool.QueryRow(ctx,
+		`SELECT id, role, password_hash FROM users WHERE lower(login) = lower($1)`, login).
+		Scan(&id, &r, &passwordHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", "", ErrNotFound
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	return id, models.Role(r), passwordHash, nil
+}
+
+// EnsureSuperadmin гарантирует аккаунт-организатора: создаёт пользователя login с переданным
+// хешем пароля и ролью superadmin, либо (если логин уже существует) выставляет ему роль
+// superadmin И этот пароль. Пароль организатора, таким образом, управляется через .env
+// (SUPERADMIN_PASSWORD): задаётся/меняется на старте. Чтобы перестать управлять паролем из env
+// (например после добавления самостоятельной смены пароля) — оставьте SUPERADMIN_PASSWORD пустым,
+// тогда бутстрап пропускается (см. cmd/server/main.go). Вызывается ДО приёма запросов, чтобы
+// организаторский логин нельзя было «застолбить» через открытую регистрацию.
+func (s *Store) EnsureSuperadmin(ctx context.Context, login, passwordHash string) error {
+	const q = `
+		INSERT INTO users (login, display_name, password_hash, role)
+		VALUES ($1, $1, $2, $3)
+		ON CONFLICT (lower(login)) DO UPDATE SET role = $3, password_hash = $2, updated_at = now()`
+	_, err := s.Pool.Exec(ctx, q, login, passwordHash, string(models.RoleSuperadmin))
+	return err
+}
+
+// GetUserSession возвращает пользователя и его tokens_valid_after одним запросом — для
+// проверки сессии в middleware (свежая роль из БД + серверная ревокация по эпохе токенов).
+func (s *Store) GetUserSession(ctx context.Context, id string) (models.User, time.Time, error) {
+	var u models.User
+	var role string
+	var validAfter time.Time
+	err := s.Pool.QueryRow(ctx, `SELECT `+userCols+`, tokens_valid_after FROM users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Login, &u.DisplayName, &u.AvatarURL, &u.Email, &role, &u.EmbarkID, &u.CreatedAt, &validAfter)
+	u.Role = models.Role(role)
+	return u, validAfter, err
+}
+
+// RevokeSessions двигает эпоху токенов пользователя на текущий момент — все ранее
+// выпущенные токены становятся недействительными (logout, при желании — смена пароля/роли).
+func (s *Store) RevokeSessions(ctx context.Context, id string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE users SET tokens_valid_after = now(), updated_at = now() WHERE id = $1`, id)
+	return err
+}
+
+// CountSuperadmins — число аккаунтов с ролью superadmin (для инварианта «нельзя снять последнего»).
+func (s *Store) CountSuperadmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE role = $1`, string(models.RoleSuperadmin)).Scan(&n)
+	return n, err
 }
 
 func (s *Store) GetUser(ctx context.Context, id string) (models.User, error) {
@@ -118,7 +183,7 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 		orderBy = "u.display_name, u.login"
 	}
 	query := `
-		SELECT u.id, u.twitch_id, u.login, u.display_name, u.avatar_url, u.email, u.role, u.embark_id, u.created_at,
+		SELECT u.id, u.login, u.display_name, u.avatar_url, u.email, u.role, u.embark_id, u.created_at,
 		       COALESCE(s.tournaments, 0), COALESCE(s.wins, 0), COALESCE(s.points, 0), COALESCE(s.participations, 0),
 		       COUNT(*) OVER() AS total
 		FROM users u
@@ -138,7 +203,8 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 		ORDER BY ` + orderBy + `
 		LIMIT $1 OFFSET $2`
 	qt := strings.TrimSpace(q)
-	like := "%" + qt + "%"
+	// Экранируем спецсимволы LIKE (\, %, _) — это поиск-подстрока, а не паттерн (escape по умолчанию '\').
+	like := "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(qt) + "%"
 	rows, err := s.Pool.Query(ctx, query, limit, offset, qt, like)
 	if err != nil {
 		return nil, 0, err
@@ -150,7 +216,7 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 	for rows.Next() {
 		var o models.UserOverview
 		var role string
-		if err := rows.Scan(&o.User.ID, &o.User.TwitchID, &o.User.Login, &o.User.DisplayName, &o.User.AvatarURL,
+		if err := rows.Scan(&o.User.ID, &o.User.Login, &o.User.DisplayName, &o.User.AvatarURL,
 			&o.User.Email, &role, &o.User.EmbarkID, &o.User.CreatedAt,
 			&o.Tournaments, &o.Wins, &o.Points, &o.Participations, &total); err != nil {
 			return nil, 0, err

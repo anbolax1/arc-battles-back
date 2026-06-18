@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/battle-for-respect/backend/internal/store"
@@ -33,6 +34,55 @@ func (s *Server) handleListUsersOverview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
+}
+
+// PATCH /api/users/{id}/role — назначить роль пользователю. Superadmin-only (см. server.go).
+// Инвариант: нельзя снять роль у последнего организатора — иначе кабинет станет недоступен никому.
+// Роль читается из БД на каждом запросе (injectUser), поэтому изменение действует сразу.
+func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	role := models.Role(strings.TrimSpace(body.Role))
+	if !role.Valid() {
+		writeError(w, http.StatusBadRequest, "неизвестная роль")
+		return
+	}
+
+	target, err := s.Store.GetUser(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "пользователь не найден")
+		return
+	}
+
+	// Понижение единственного организатора запрещено.
+	if target.Role == models.RoleSuperadmin && role != models.RoleSuperadmin {
+		n, err := s.Store.CountSuperadmins(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "не удалось проверить роли")
+			return
+		}
+		if n <= 1 {
+			writeError(w, http.StatusConflict, "нельзя снять роль у последнего организатора")
+			return
+		}
+	}
+
+	if err := s.Store.SetRole(r.Context(), id, role); err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось изменить роль")
+		return
+	}
+	updated, err := s.Store.GetUser(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось загрузить пользователя")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // GET /api/players/{login} — публичный профиль игрока: user + сезон-статы + история (B6).

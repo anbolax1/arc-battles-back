@@ -64,8 +64,9 @@ ssh admin2@$VPS 'mv -f ~/back/server-linux.bak ~/back/server-linux && systemctl 
 
 ## Конфиг / секреты
 
-- Лежат в `~/back/.env` на сервере (скрытый файл, виден через `ls -a`): `JWT_SECRET`,
-  `TWITCH_CLIENT_ID/SECRET`, `DATABASE_URL`, `ORGANIZER_TWITCH_LOGINS`, `COOKIE_*` и т.д.
+- Лежат в `~/back/.env` на сервере (скрытый файл, виден через `ls -a`): `JWT_SECRET`
+  (случайный ≥32 символов), `DATABASE_URL`, `SUPERADMIN_LOGIN`/`SUPERADMIN_PASSWORD` (бутстрап
+  организатора), `COOKIE_*`, `TRUST_PROXY=true` (за nginx) и `BIND_ADDR=127.0.0.1:8080` и т.д.
 - В репозитории — только шаблон `.env.example`. Реальный `.env` в git не попадает (gitignore).
 - Меняешь `.env` → `systemctl --user restart respect-back`.
 
