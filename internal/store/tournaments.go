@@ -3,6 +3,9 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/jackc/pgx/v5"
@@ -46,6 +49,66 @@ func (s *Store) CreateTournament(ctx context.Context, t models.Tournament) (mode
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING ` + tournamentCols
 	return scanTournament(s.Pool.QueryRow(ctx, q, t.Title, t.Mode, t.Status, t.TotalRounds, string(maps), t.StartsAt))
+}
+
+// UpdateTournamentMeta частично правит «шапку» турнира: название и/или время начала.
+// startsAtSet=true со startsAt=nil очищает дату (NULL). ErrNotFound — если турнира нет.
+func (s *Store) UpdateTournamentMeta(ctx context.Context, id string, title *string, startsAtSet bool, startsAt *time.Time) error {
+	sets := []string{}
+	args := []any{}
+	n := 1
+	if title != nil {
+		sets = append(sets, fmt.Sprintf("title = $%d", n))
+		args = append(args, *title)
+		n++
+	}
+	if startsAtSet {
+		sets = append(sets, fmt.Sprintf("starts_at = $%d", n))
+		args = append(args, startsAt)
+		n++
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	sets = append(sets, "updated_at = now()")
+	args = append(args, id)
+	q := `UPDATE tournaments SET ` + strings.Join(sets, ", ") + fmt.Sprintf(` WHERE id = $%d`, n)
+	ct, err := s.Pool.Exec(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteTournament удаляет турнир и каскадом всё связанное: участников, раунды,
+// результаты раундов, назначенные стартовые/бонусные задания и штрафы-усложнения
+// (через FK ON DELETE CASCADE). Пулы каталога (задания/усложнения/стартовые) НЕ трогаются.
+// Поставленных в турнир игроков возвращаем в общий пул заявок. ErrNotFound — если турнира нет.
+func (s *Store) DeleteTournament(ctx context.Context, id string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Вернуть в пул тех, кто был поставлен в этот турнир из заявки (иначе их заявка
+	// осталась бы «accepted» без турнира — registrations.tournament_id здесь ON DELETE SET NULL).
+	if _, err := tx.Exec(ctx,
+		`UPDATE registrations SET status = 'pending', tournament_id = NULL, decided_at = NULL
+		   WHERE tournament_id = $1 AND status = 'accepted'`, id); err != nil {
+		return err
+	}
+	ct, err := tx.Exec(ctx, `DELETE FROM tournaments WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ListTournaments(ctx context.Context, status string) ([]models.Tournament, error) {

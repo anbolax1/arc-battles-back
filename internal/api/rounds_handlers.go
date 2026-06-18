@@ -66,7 +66,7 @@ func (s *Server) handleListRoundEntries(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, entries)
 }
 
-// PATCH /api/rounds/{id} — статус/карта раунда. Organizer-only.
+// PATCH /api/rounds/{id} — статус/карта/номер раунда. Organizer-only.
 func (s *Server) handleUpdateRound(w http.ResponseWriter, r *http.Request) {
 	roundID := chi.URLParam(r, "id")
 	if st, err := s.Store.StatusByRound(r.Context(), roundID); err == nil && s.blockIfFinished(w, st) {
@@ -75,14 +75,19 @@ func (s *Server) handleUpdateRound(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Status *string `json:"status"`
 		Map    *string `json:"map"`
+		Number *int    `json:"number"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	round, err := s.Store.UpdateRound(r.Context(), roundID, body.Status, body.Map)
+	round, err := s.Store.UpdateRound(r.Context(), roundID, body.Status, body.Map, body.Number)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "раунд не найден")
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "раунд с таким номером уже есть")
 		return
 	}
 	if err != nil {
@@ -90,4 +95,20 @@ func (s *Server) handleUpdateRound(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, round)
+}
+
+// DELETE /api/rounds/{id} — удалить раунд (и каскадом его результаты/задания/штрафы). Organizer-only.
+func (s *Server) handleDeleteRound(w http.ResponseWriter, r *http.Request) {
+	roundID := chi.URLParam(r, "id")
+	if st, err := s.Store.StatusByRound(r.Context(), roundID); err == nil && s.blockIfFinished(w, st) {
+		return
+	}
+	if err := s.Store.DeleteRound(r.Context(), roundID); errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "раунд не найден")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

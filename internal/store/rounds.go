@@ -8,6 +8,7 @@ import (
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func scanRound(row pgx.Row) (models.Round, error) {
@@ -49,8 +50,9 @@ func (s *Store) CreateRound(ctx context.Context, r models.Round) (models.Round, 
 	return scanRound(s.Pool.QueryRow(ctx, q, r.TournamentID, r.Number, r.Map, r.Status))
 }
 
-// UpdateRound частично обновляет раунд (статус/карта) по id. ErrNotFound — если нет.
-func (s *Store) UpdateRound(ctx context.Context, id string, status, mapName *string) (models.Round, error) {
+// UpdateRound частично обновляет раунд (статус/карта/номер) по id. ErrNotFound — если нет,
+// ErrConflict — если номер раунда уже занят в этом турнире (UNIQUE tournament_id, number).
+func (s *Store) UpdateRound(ctx context.Context, id string, status, mapName *string, number *int) (models.Round, error) {
 	const cols = `id, tournament_id, number, map, status`
 	sets := []string{}
 	args := []any{}
@@ -63,6 +65,11 @@ func (s *Store) UpdateRound(ctx context.Context, id string, status, mapName *str
 	if mapName != nil {
 		sets = append(sets, fmt.Sprintf("map = $%d", n))
 		args = append(args, *mapName)
+		n++
+	}
+	if number != nil {
+		sets = append(sets, fmt.Sprintf("number = $%d", n))
+		args = append(args, *number)
 		n++
 	}
 	if len(sets) == 0 {
@@ -78,5 +85,24 @@ func (s *Store) UpdateRound(ctx context.Context, id string, status, mapName *str
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return r, ErrConflict
+		}
+	}
 	return r, err
+}
+
+// DeleteRound удаляет раунд и каскадом его результаты, назначенные стартовые/бонусные
+// задания и штрафы-усложнения (FK ON DELETE CASCADE). ErrNotFound — если раунда нет.
+func (s *Store) DeleteRound(ctx context.Context, id string) error {
+	ct, err := s.Pool.Exec(ctx, `DELETE FROM rounds WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
