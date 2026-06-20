@@ -141,6 +141,66 @@ func (s *Store) PlayerHistory(ctx context.Context, userID string) ([]models.Play
 	return out, rows.Err()
 }
 
+// PlayerAggregate — расширенная статистика игрока по завершённым турнирам:
+// источники очков (суммы разбивки по всем участиям) + любимая карта.
+// Винрейт по режимам и серия считаются в хендлере из истории. Если игрок ещё
+// не сыграл ни одного завершённого турнира — возвращает нулевую статистику.
+func (s *Store) PlayerAggregate(ctx context.Context, userID string) (models.PlayerStats, error) {
+	var st models.PlayerStats
+	rows, err := s.Pool.Query(ctx, `
+		SELECT p.id
+		FROM participants p
+		JOIN tournaments t ON t.id = p.tournament_id
+		WHERE t.status = 'finished'
+		  AND (p.user_id = $1
+		       OR (jsonb_typeof(p.members) = 'array'
+		           AND p.members @> jsonb_build_array(jsonb_build_object('userId', $1::text))))`, userID)
+	if err != nil {
+		return st, err
+	}
+	var pids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return st, err
+		}
+		pids = append(pids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return st, err
+	}
+	if len(pids) == 0 {
+		return st, nil
+	}
+
+	for _, pid := range pids {
+		b, err := s.participantBreakdown(ctx, pid)
+		if err != nil {
+			return st, err
+		}
+		st.BasePoints += b.Base
+		st.StarterPoints += b.Starter
+		st.BonusPoints += b.BonusFixed + b.BonusPercent
+		st.PenaltyPoints += b.Penalty
+	}
+
+	// любимая карта — где сыграно больше всего раундов
+	err = s.Pool.QueryRow(ctx, `
+		SELECT r.map, COUNT(*)
+		FROM round_entries re
+		JOIN rounds r ON r.id = re.round_id
+		WHERE re.participant_id = ANY($1) AND r.map <> ''
+		GROUP BY r.map
+		ORDER BY COUNT(*) DESC, r.map
+		LIMIT 1`, pids).Scan(&st.FavoriteMap, &st.FavoriteMapRounds)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return st, err
+	}
+	return st, nil
+}
+
 // ListUsers — все пользователи (для выпадашек выбора участников в кабинете).
 func (s *Store) ListUsers(ctx context.Context) ([]models.User, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT `+userCols+` FROM users ORDER BY display_name, login`)

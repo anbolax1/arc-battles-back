@@ -61,59 +61,73 @@ func (s *Store) ListRoundEntries(ctx context.Context, roundID string) ([]models.
 	return out, rows.Err()
 }
 
-// RecomputeParticipantPoints пересчитывает total_points участника:
+// PointsBreakdown — разложение очков участника по источникам (единый источник формулы
+// для пересчёта total_points и для статистики профиля).
+type PointsBreakdown struct {
+	Base         int // ручные очки за раунды (round_entries.points)
+	Starter      int // зачтённые стартовые: times × points
+	BonusFixed   int // бонусные fixed
+	BonusPercent int // бонусные percent (от earned)
+	Penalty      int // штрафы (число ≥0; вычитается)
+}
+
+// Earned — база, на которую начисляются percent-бонусы и штрафы.
+func (b PointsBreakdown) Earned() int { return b.Base + b.Starter + b.BonusFixed }
+
+// Total — итоговые очки участника: earned + percent-бонусы − штрафы.
+func (b PointsBreakdown) Total() int { return b.Earned() + b.BonusPercent - b.Penalty }
+
+// participantBreakdown считает разложение очков участника (без записи в БД):
 //
 //	earned = SUM(round_entries.points)              -- база (ручные очки за раунды)
 //	       + SUM(rst.times × starter_task.points)    -- зачтённые стартовые задания
 //	       + SUM(выполненных бонусных, fixed)        -- бонусные fixed
 //	bonus%  = SUM(выполненных бонусных, percent → round(pts% × earned))
 //	penalty = SUM(rp.times × величина)               -- fixed: penalty; percent: round(penalty% × earned)
-//	total  = earned + bonus% − penalty
 //
-// Все percent считаются от earned (база + стартовые + fixed-бонусы). ErrNotFound — если участника нет.
-func (s *Store) RecomputeParticipantPoints(ctx context.Context, participantID string) (int, error) {
-	var base, starterAward, bonusFixed int
+// Все percent считаются от earned (база + стартовые + fixed-бонусы).
+func (s *Store) participantBreakdown(ctx context.Context, participantID string) (PointsBreakdown, error) {
+	var b PointsBreakdown
 	if err := s.Pool.QueryRow(ctx,
 		`SELECT COALESCE(SUM(points), 0) FROM round_entries WHERE participant_id = $1`,
-		participantID).Scan(&base); err != nil {
-		return 0, err
+		participantID).Scan(&b.Base); err != nil {
+		return b, err
 	}
 	if err := s.Pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(rst.times * st.points), 0)
 		FROM round_starter_tasks rst
 		JOIN starter_tasks st ON st.id = rst.starter_task_id
-		WHERE rst.completed_by = $1`, participantID).Scan(&starterAward); err != nil {
-		return 0, err
+		WHERE rst.completed_by = $1`, participantID).Scan(&b.Starter); err != nil {
+		return b, err
 	}
 	if err := s.Pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(rbt.times * ct.points), 0)
 		FROM round_bonus_tasks rbt
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
-		WHERE rbt.participant_id = $1 AND ct.value_type = 'fixed'`, participantID).Scan(&bonusFixed); err != nil {
-		return 0, err
+		WHERE rbt.participant_id = $1 AND ct.value_type = 'fixed'`, participantID).Scan(&b.BonusFixed); err != nil {
+		return b, err
 	}
-	earned := base + starterAward + bonusFixed
+	earned := b.Earned()
 
 	// percent-бонусы (зачтённые, times>0)
-	bonusPercent := 0
 	bRows, err := s.Pool.Query(ctx, `
 		SELECT rbt.times, ct.points FROM round_bonus_tasks rbt
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		WHERE rbt.participant_id = $1 AND rbt.times > 0 AND ct.value_type = 'percent'`, participantID)
 	if err != nil {
-		return 0, err
+		return b, err
 	}
 	for bRows.Next() {
 		var times, pct int
 		if err := bRows.Scan(&times, &pct); err != nil {
 			bRows.Close()
-			return 0, err
+			return b, err
 		}
-		bonusPercent += times * models.EffectiveValue(pct, models.ValuePercent, earned)
+		b.BonusPercent += times * models.EffectiveValue(pct, models.ValuePercent, earned)
 	}
 	bRows.Close()
 	if err := bRows.Err(); err != nil {
-		return 0, err
+		return b, err
 	}
 
 	// штрафы
@@ -123,24 +137,32 @@ func (s *Store) RecomputeParticipantPoints(ctx context.Context, participantID st
 		JOIN catalog_complications c ON c.id = rp.complication_id
 		WHERE rp.participant_id = $1 AND rp.times > 0`, participantID)
 	if err != nil {
-		return 0, err
+		return b, err
 	}
-	penalty := 0
 	for pRows.Next() {
 		var times, value int
 		var valueType string
 		if err := pRows.Scan(&times, &value, &valueType); err != nil {
 			pRows.Close()
-			return 0, err
+			return b, err
 		}
-		penalty += times * models.EffectiveValue(value, valueType, earned)
+		b.Penalty += times * models.EffectiveValue(value, valueType, earned)
 	}
 	pRows.Close()
 	if err := pRows.Err(); err != nil {
+		return b, err
+	}
+	return b, nil
+}
+
+// RecomputeParticipantPoints пересчитывает и сохраняет total_points участника
+// (= participantBreakdown.Total). ErrNotFound — если участника нет.
+func (s *Store) RecomputeParticipantPoints(ctx context.Context, participantID string) (int, error) {
+	b, err := s.participantBreakdown(ctx, participantID)
+	if err != nil {
 		return 0, err
 	}
-
-	total := earned + bonusPercent - penalty
+	total := b.Total()
 	ct, err := s.Pool.Exec(ctx, `UPDATE participants SET total_points = $2 WHERE id = $1`, participantID, total)
 	if err != nil {
 		return 0, err

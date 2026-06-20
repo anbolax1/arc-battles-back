@@ -140,12 +140,35 @@ type PlayerHistoryItem struct {
 	Win          bool       `json:"win"`
 }
 
-// PlayerProfile — публичный профиль игрока: пользователь + сезон-статы + история (B6).
+// PlayerStats — расширенная статистика игрока по завершённым турнирам:
+// винрейт по режимам, источники очков, любимая карта и текущая серия.
+type PlayerStats struct {
+	SoloWins   int `json:"soloWins"`
+	SoloPlayed int `json:"soloPlayed"`
+	DuoWins    int `json:"duoWins"`
+	DuoPlayed  int `json:"duoPlayed"`
+
+	// Серия по последним завершённым турнирам: kind = "win" | "loss" | "" (нет игр).
+	StreakKind string `json:"streakKind"`
+	StreakLen  int    `json:"streakLen"`
+
+	// Источники очков (суммарно). PenaltyPoints — сколько вычтено (число ≥0).
+	BasePoints    int `json:"basePoints"`
+	StarterPoints int `json:"starterPoints"`
+	BonusPoints   int `json:"bonusPoints"`
+	PenaltyPoints int `json:"penaltyPoints"`
+
+	FavoriteMap       string `json:"favoriteMap"`
+	FavoriteMapRounds int    `json:"favoriteMapRounds"`
+}
+
+// PlayerProfile — публичный профиль игрока: пользователь + статы + история (B6).
 type PlayerProfile struct {
 	User        User                `json:"user"`
 	Points      int                 `json:"points"`
 	Wins        int                 `json:"wins"`
 	Tournaments int                 `json:"tournaments"`
+	Stats       PlayerStats         `json:"stats"`
 	History     []PlayerHistoryItem `json:"history"`
 }
 

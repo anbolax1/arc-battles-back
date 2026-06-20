@@ -102,14 +102,51 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Источники очков и любимая карта — из стора (по participant-id завершённых турниров).
+	stats, err := s.Store.PlayerAggregate(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Сводка и винрейт по режимам — из истории (только завершённые турниры).
 	var points, wins, tournaments int
 	for _, h := range history {
-		if h.Status == "finished" {
-			points += h.Points
-			tournaments++
+		if h.Status != "finished" {
+			continue
+		}
+		points += h.Points
+		tournaments++
+		if h.Win {
+			wins++
+		}
+		if h.Mode == "2x2" {
+			stats.DuoPlayed++
 			if h.Win {
-				wins++
+				stats.DuoWins++
 			}
+		} else {
+			stats.SoloPlayed++
+			if h.Win {
+				stats.SoloWins++
+			}
+		}
+	}
+	// Текущая серия — ведущий ран одинаковых исходов (история отсортирована по дате убыв.).
+	for _, h := range history {
+		if h.Status != "finished" {
+			continue
+		}
+		kind := "loss"
+		if h.Win {
+			kind = "win"
+		}
+		if stats.StreakKind == "" {
+			stats.StreakKind = kind
+			stats.StreakLen = 1
+		} else if kind == stats.StreakKind {
+			stats.StreakLen++
+		} else {
+			break
 		}
 	}
 	writeJSON(w, http.StatusOK, models.PlayerProfile{
@@ -117,6 +154,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		Points:      points,
 		Wins:        wins,
 		Tournaments: tournaments,
+		Stats:       stats,
 		History:     history,
 	})
 }
