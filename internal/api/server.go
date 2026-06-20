@@ -105,8 +105,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/registrations/{id}/decide", s.handleDecideRegistration)
 			r.Put("/overlay/state", s.handlePutOverlayState)
 
-			// Сезоны рейтинга: начать новый (завершает текущий активный).
+			// Сезоны рейтинга: начать новый (завершает текущий активный); удалить (турниры отвязываются).
 			r.Post("/seasons", s.handleStartSeason)
+			r.Delete("/seasons/{id}", s.handleDeleteSeason)
 
 			// Общие пресеты раскладки оверлея (сохранить/переключать шаблоны).
 			r.Get("/overlay/presets", s.handleListOverlayPresets)

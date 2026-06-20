@@ -1,8 +1,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/battle-for-respect/backend/internal/store"
+	"github.com/go-chi/chi/v5"
 )
 
 // handleListSeasons — список сезонов (публично; для селектора на /rating).
@@ -34,4 +38,20 @@ func (s *Server) handleStartSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, sn)
+}
+
+// handleDeleteSeason (superadmin) — удалить сезон. Турниры сезона сохраняются и
+// отвязываются (season_id → NULL); в другие сезоны они автоматически не попадают.
+func (s *Server) handleDeleteSeason(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	err := s.Store.DeleteSeason(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "сезон не найден")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

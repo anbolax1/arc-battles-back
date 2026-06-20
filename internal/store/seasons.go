@@ -42,6 +42,20 @@ func (s *Store) ActiveSeason(ctx context.Context) (models.Season, error) {
 	return sn, err
 }
 
+// DeleteSeason удаляет сезон. Турниры этого сезона НЕ удаляются — их season_id
+// обнуляется автоматически (FK tournaments.season_id ON DELETE SET NULL), т.е. они
+// становятся непривязанными и в новый сезон сами не попадут. ErrNotFound — если сезона нет.
+func (s *Store) DeleteSeason(ctx context.Context, id string) error {
+	ct, err := s.Pool.Exec(ctx, `DELETE FROM seasons WHERE id = $1`, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // StartNewSeason завершает текущий активный сезон (если есть) и создаёт новый активный.
 // Атомарно: ровно один active сохраняется (партиальный уникальный индекс это и страхует).
 func (s *Store) StartNewSeason(ctx context.Context, name string) (models.Season, error) {
