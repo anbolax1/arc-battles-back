@@ -104,6 +104,12 @@ func (s *Server) Router() http.Handler {
 			r.Post("/registrations/{id}/decide", s.handleDecideRegistration)
 			r.Put("/overlay/state", s.handlePutOverlayState)
 
+			// Общие пресеты раскладки оверлея (сохранить/переключать шаблоны).
+			r.Get("/overlay/presets", s.handleListOverlayPresets)
+			r.Post("/overlay/presets", s.handleCreateOverlayPreset)
+			r.Put("/overlay/presets/{id}", s.handleUpdateOverlayPreset)
+			r.Delete("/overlay/presets/{id}", s.handleDeleteOverlayPreset)
+
 			// Справочник заданий и усложнений (редактирование организатором)
 			r.Post("/catalog/tasks", s.handleCreateTask)
 			r.Patch("/catalog/tasks/{id}", s.handleUpdateTask)

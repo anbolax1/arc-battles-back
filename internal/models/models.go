@@ -244,6 +244,15 @@ type LiveStanding struct {
 	Points        int    `json:"points"`
 }
 
+// LiveBonus — бонусное задание стороны в оверлее (виджет «Бонусные»).
+type LiveBonus struct {
+	Text      string `json:"text"`
+	Points    int    `json:"points"`
+	ValueType string `json:"valueType"` // fixed | percent
+	Times     int    `json:"times"`     // сколько раз зачтено (0 — ещё нет)
+	Who       string `json:"who,omitempty"`
+}
+
 // LiveState — состояние оверлея, которым управляет организатор и которое стримится в OBS.
 type LiveState struct {
 	TournamentID         *string           `json:"tournamentId,omitempty"`
@@ -259,6 +268,67 @@ type LiveState struct {
 	Complication         *LiveComplication `json:"complication,omitempty"`
 	Standings            []LiveStanding    `json:"standings,omitempty"`
 	ShowStandings        bool              `json:"showStandings"`
+
+	// Богатые данные для модульных виджетов (Фаза 3). Заполняются «Эфиром»;
+	// пустые при дефолтном табло. Singular complication выше оставлен для совместимости.
+	RoundTasks    []Task             `json:"roundTasks,omitempty"`    // стартовые задания текущего раунда
+	BonusTasks    []LiveBonus        `json:"bonusTasks,omitempty"`    // бонусные фокусной стороны
+	Complications []LiveComplication `json:"complications,omitempty"` // усложнения обеих сторон
+
+	// Кастомизируемая раскладка оверлея (модульные виджеты). Если nil — оверлей
+	// рендерит дефолтную раскладку (источник дефолта — фронт). Чтобы пуш раскладки
+	// организатором переживал round-trip через json.Marshal(LiveState), поле должно
+	// присутствовать в структуре.
+	Layout *OverlayLayout `json:"layout,omitempty"`
+}
+
+// OverlayLayout — документ раскладки оверлея: набор независимых виджетов с
+// позициями/прозрачностью + глобальные настройки сцены. Хранится внутри того же
+// jsonb live_state, отдельной таблицы/эндпоинта не требует.
+type OverlayLayout struct {
+	Version int              `json:"version"`
+	Accent  string           `json:"accent,omitempty"` // глобальный акцент (переопределяет --primary)
+	StageBg OverlayBg        `json:"stageBg"`          // глобальный фон сцены (затемнение)
+	Pad     float64          `json:"pad,omitempty"`    // отступ от края (px сцены) при выравнивании по краю; 0 = дефолт
+	Widgets []WidgetInstance `json:"widgets"`
+}
+
+// OverlayBg — настройка фона (вкл/выкл + прозрачность 0..1). Используется и для
+// сцены целиком, и для каждого виджета.
+type OverlayBg struct {
+	On      bool    `json:"on"`
+	Opacity float64 `json:"opacity"`
+}
+
+// OverlayPreset — общий (глобальный) сохранённый шаблон раскладки. layout хранится
+// «как есть» (json.RawMessage = полный OverlayLayout), чтобы не зависеть от полей модели.
+type OverlayPreset struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Layout    json.RawMessage `json:"layout"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+}
+
+// WidgetInstance — один экземпляр виджета на сцене. Позиция/размер — ДОЛЯМИ от
+// 1920×1080 (resolution-independent), чтобы раскладка не зависела от разрешения.
+type WidgetInstance struct {
+	ID          string          `json:"id"`
+	Type        string          `json:"type"`        // scoreboard|round|complications|standings|roundTasks|bonusTasks|text|logo
+	X           float64         `json:"x"`           // 0..1 — левый край
+	Y           float64         `json:"y"`           // 0..1 — верхний край
+	W           float64         `json:"w,omitempty"` // 0..1 — ширина (пусто = по контенту)
+	H           float64         `json:"h,omitempty"` // 0..1 — высота (пусто = по контенту)
+	Scale       float64         `json:"scale"`
+	Z           int             `json:"z"`
+	Visible     bool            `json:"visible"`
+	Locked      bool            `json:"locked,omitempty"`
+	HideTitle   bool            `json:"hideTitle,omitempty"`   // скрыть заголовок/подпись виджета
+	HidePenalty bool            `json:"hidePenalty,omitempty"` // усложнения: не показывать плашку «ШТРАФ» при нарушении
+	Anchor      string          `json:"anchor,omitempty"`      // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
+	Bg          OverlayBg       `json:"bg"`
+	Accent      string          `json:"accent,omitempty"`
+	Props       json.RawMessage `json:"props,omitempty"` // пер-типовые доп.поля (текст, url логотипа и т.п.)
 }
 
 // StarterTask — стартовое задание из пула (НЕ бонусное, скрыто от публики/правил).

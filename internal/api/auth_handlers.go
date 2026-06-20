@@ -16,6 +16,9 @@ import (
 // Узкий набор исключает пробелы, омоглифы и спецсимволы (меньше путаницы и сюрпризов).
 var loginRe = regexp.MustCompile(`^[A-Za-z0-9_]{3,32}$`)
 
+// embarkRe — Embark ID: ник (без «#»), решётка, ровно 4 цифры — напр. «Istwood#1234».
+var embarkRe = regexp.MustCompile(`^[^#]+#\d{4}$`)
+
 const minPasswordLen = 8
 
 type credentials struct {
@@ -200,7 +203,13 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	updated, err := s.Store.UpdateEmbarkID(r.Context(), u.ID, body.EmbarkID)
+	embark := strings.TrimSpace(body.EmbarkID)
+	// Пусто — допустимо (очистить). Иначе строгий формат «Ник#1234».
+	if embark != "" && !embarkRe.MatchString(embark) {
+		writeError(w, http.StatusBadRequest, "Формат Embark ID: Ник#1234 (ник, решётка и ровно 4 цифры)")
+		return
+	}
+	updated, err := s.Store.UpdateEmbarkID(r.Context(), u.ID, embark)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "не удалось обновить профиль")
 		return
