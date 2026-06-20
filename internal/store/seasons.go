@@ -43,17 +43,11 @@ func (s *Store) ActiveSeason(ctx context.Context) (models.Season, error) {
 	return sn, err
 }
 
-// UpdateSeason меняет название и даты сезона (started_at, ended_at). Статус не трогаем
-// (он управляется началом нового/удалением). Инвариант «активный сезон идёт» защищаем
-// в SQL: у active сезона ended_at всегда NULL, что бы ни прислал клиент. ErrNotFound — нет сезона.
+// UpdateSeason меняет название и даты сезона. ended_at необязательна (nil = не задана) и
+// допустима для любого сезона, включая активный. Статус не трогаем. ErrNotFound — нет сезона.
 func (s *Store) UpdateSeason(ctx context.Context, id, name string, startedAt time.Time, endedAt *time.Time) (models.Season, error) {
-	// $4::timestamptz обязателен: в CASE с NULL-веткой Postgres иначе выводит тип $4 как text.
 	sn, err := scanSeason(s.Pool.QueryRow(ctx,
-		`UPDATE seasons
-		    SET name = $2, started_at = $3,
-		        ended_at = CASE WHEN status = 'active' THEN NULL ELSE $4::timestamptz END
-		  WHERE id = $1
-		 RETURNING `+seasonCols,
+		`UPDATE seasons SET name = $2, started_at = $3, ended_at = $4 WHERE id = $1 RETURNING `+seasonCols,
 		id, name, startedAt, endedAt))
 	if err == pgx.ErrNoRows {
 		return models.Season{}, ErrNotFound
