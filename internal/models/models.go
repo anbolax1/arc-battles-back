@@ -241,7 +241,8 @@ type LiveComplication struct {
 type LiveStanding struct {
 	ParticipantID string `json:"participantId,omitempty"`
 	Name          string `json:"name"`
-	Points        int    `json:"points"`
+	Points        int    `json:"points"`      // всего по турниру
+	RoundPoints   int    `json:"roundPoints"` // очки за текущий раунд (для опции в табло)
 }
 
 // LiveBonus — бонусное задание стороны в оверлее (виджет «Бонусные»).
@@ -313,22 +314,23 @@ type OverlayPreset struct {
 // WidgetInstance — один экземпляр виджета на сцене. Позиция/размер — ДОЛЯМИ от
 // 1920×1080 (resolution-independent), чтобы раскладка не зависела от разрешения.
 type WidgetInstance struct {
-	ID          string          `json:"id"`
-	Type        string          `json:"type"`        // scoreboard|round|complications|standings|roundTasks|bonusTasks|text|logo
-	X           float64         `json:"x"`           // 0..1 — левый край
-	Y           float64         `json:"y"`           // 0..1 — верхний край
-	W           float64         `json:"w,omitempty"` // 0..1 — ширина (пусто = по контенту)
-	H           float64         `json:"h,omitempty"` // 0..1 — высота (пусто = по контенту)
-	Scale       float64         `json:"scale"`
-	Z           int             `json:"z"`
-	Visible     bool            `json:"visible"`
-	Locked      bool            `json:"locked,omitempty"`
-	HideTitle   bool            `json:"hideTitle,omitempty"`   // скрыть заголовок/подпись виджета
-	HidePenalty bool            `json:"hidePenalty,omitempty"` // усложнения: не показывать плашку «ШТРАФ» при нарушении
-	Anchor      string          `json:"anchor,omitempty"`      // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
-	Bg          OverlayBg       `json:"bg"`
-	Accent      string          `json:"accent,omitempty"`
-	Props       json.RawMessage `json:"props,omitempty"` // пер-типовые доп.поля (текст, url логотипа и т.п.)
+	ID             string          `json:"id"`
+	Type           string          `json:"type"`        // scoreboard|round|complications|standings|roundTasks|bonusTasks|text|logo
+	X              float64         `json:"x"`           // 0..1 — левый край
+	Y              float64         `json:"y"`           // 0..1 — верхний край
+	W              float64         `json:"w,omitempty"` // 0..1 — ширина (пусто = по контенту)
+	H              float64         `json:"h,omitempty"` // 0..1 — высота (пусто = по контенту)
+	Scale          float64         `json:"scale"`
+	Z              int             `json:"z"`
+	Visible        bool            `json:"visible"`
+	Locked         bool            `json:"locked,omitempty"`
+	HideTitle      bool            `json:"hideTitle,omitempty"`      // скрыть заголовок/подпись виджета
+	HidePenalty    bool            `json:"hidePenalty,omitempty"`    // усложнения: не показывать плашку «ШТРАФ» при нарушении
+	ShowRoundScore bool            `json:"showRoundScore,omitempty"` // табло: очки за раунд в скобках у счёта
+	Anchor         string          `json:"anchor,omitempty"`         // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
+	Bg             OverlayBg       `json:"bg"`
+	Accent         string          `json:"accent,omitempty"`
+	Props          json.RawMessage `json:"props,omitempty"` // пер-типовые доп.поля (текст, url логотипа и т.п.)
 }
 
 // StarterTask — стартовое задание из пула (НЕ бонусное, скрыто от публики/правил).
