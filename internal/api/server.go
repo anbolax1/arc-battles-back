@@ -107,6 +107,7 @@ func (s *Server) Router() http.Handler {
 
 			// Сезоны рейтинга: начать новый (завершает текущий активный); удалить (турниры отвязываются).
 			r.Post("/seasons", s.handleStartSeason)
+			r.Patch("/seasons/{id}", s.handleUpdateSeason)
 			r.Delete("/seasons/{id}", s.handleDeleteSeason)
 
 			// Общие пресеты раскладки оверлея (сохранить/переключать шаблоны).

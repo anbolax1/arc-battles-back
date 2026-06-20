@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -38,6 +39,44 @@ func (s *Server) handleStartSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, sn)
+}
+
+// handleUpdateSeason (superadmin) — изменить название и даты сезона.
+// Тело: {name, startedAt, endedAt?}. endedAt пустой/null — сезон идёт. Статус не меняется.
+func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Name      string     `json:"name"`
+		StartedAt time.Time  `json:"startedAt"`
+		EndedAt   *time.Time `json:"endedAt"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "укажите название сезона")
+		return
+	}
+	if body.StartedAt.IsZero() {
+		writeError(w, http.StatusBadRequest, "укажите дату начала")
+		return
+	}
+	if body.EndedAt != nil && body.EndedAt.Before(body.StartedAt) {
+		writeError(w, http.StatusBadRequest, "дата окончания раньше даты начала")
+		return
+	}
+	sn, err := s.Store.UpdateSeason(r.Context(), id, name, body.StartedAt, body.EndedAt)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "сезон не найден")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sn)
 }
 
 // handleDeleteSeason (superadmin) — удалить сезон. Турниры сезона сохраняются и
