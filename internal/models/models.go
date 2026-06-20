@@ -44,6 +44,16 @@ type User struct {
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
+// Season — период рейтинга. Ровно один active одновременно; завершённый имеет ended_at.
+type Season struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Status    string     `json:"status"` // active | finished
+	StartedAt time.Time  `json:"startedAt"`
+	EndedAt   *time.Time `json:"endedAt,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+}
+
 type Tournament struct {
 	ID                  string        `json:"id"`
 	Title               string        `json:"title"`

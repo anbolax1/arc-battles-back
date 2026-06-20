@@ -44,9 +44,10 @@ func (s *Store) CreateTournament(ctx context.Context, t models.Tournament) (mode
 	if t.TotalRounds == 0 {
 		t.TotalRounds = 3
 	}
+	// season_id — текущий активный сезон (подзапросом): новые турниры идут в него.
 	const q = `
-		INSERT INTO tournaments (title, mode, status, total_rounds, maps, starts_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO tournaments (title, mode, status, total_rounds, maps, starts_at, season_id)
+		VALUES ($1, $2, $3, $4, $5, $6, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1))
 		RETURNING ` + tournamentCols
 	return scanTournament(s.Pool.QueryRow(ctx, q, t.Title, t.Mode, t.Status, t.TotalRounds, string(maps), t.StartsAt))
 }

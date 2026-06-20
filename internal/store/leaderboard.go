@@ -11,7 +11,9 @@ import (
 // засчитываются в сезон после его окончания, а не после каждого раунда.
 //   - 1x1: участники kind='player', привязанные к пользователю.
 //   - 2x2: баллы команды распределяются на участников состава (members[].userId).
-func (s *Store) Leaderboard(ctx context.Context, mode string) ([]models.LeaderboardRow, error) {
+//
+// seasonID="" — рейтинг за всё время (без фильтра); иначе только турниры этого сезона.
+func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]models.LeaderboardRow, error) {
 	var q string
 	if mode == "2x2" {
 		q = `
@@ -21,6 +23,7 @@ func (s *Store) Leaderboard(ctx context.Context, mode string) ([]models.Leaderbo
 			       COUNT(DISTINCT p.tournament_id)::int AS tournaments
 			FROM participants p
 			JOIN tournaments t ON t.id = p.tournament_id AND t.mode = '2x2' AND t.status = 'finished'
+			   AND ($1 = '' OR t.season_id = $1)
 			JOIN LATERAL jsonb_array_elements(p.members) m ON true
 			JOIN users u ON u.id = (m->>'userId')
 			GROUP BY u.id, u.login, u.display_name, u.avatar_url
@@ -33,13 +36,14 @@ func (s *Store) Leaderboard(ctx context.Context, mode string) ([]models.Leaderbo
 			       COUNT(DISTINCT p.tournament_id)::int AS tournaments
 			FROM participants p
 			JOIN tournaments t ON t.id = p.tournament_id AND t.mode = '1x1' AND t.status = 'finished'
+			   AND ($1 = '' OR t.season_id = $1)
 			JOIN users u ON u.id = p.user_id
 			WHERE p.kind = 'player'
 			GROUP BY u.id, u.login, u.display_name, u.avatar_url
 			ORDER BY points DESC, wins DESC`
 	}
 
-	rows, err := s.Pool.Query(ctx, q)
+	rows, err := s.Pool.Query(ctx, q, seasonID)
 	if err != nil {
 		return nil, err
 	}

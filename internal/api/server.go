@@ -65,6 +65,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/tournaments", s.handleListTournaments)
 		r.Get("/tournaments/{id}", s.handleGetTournament)
 		r.Get("/leaderboard", s.handleLeaderboard)
+		r.Get("/seasons", s.handleListSeasons)
 		r.Get("/players/{login}", s.handleGetPlayer)
 		r.Get("/rules", s.handleRules)
 		r.Get("/overlay/state", s.handleGetOverlayState)
@@ -103,6 +104,9 @@ func (s *Server) Router() http.Handler {
 			r.Get("/registrations/pool/page", s.handleListPoolPage)
 			r.Post("/registrations/{id}/decide", s.handleDecideRegistration)
 			r.Put("/overlay/state", s.handlePutOverlayState)
+
+			// Сезоны рейтинга: начать новый (завершает текущий активный).
+			r.Post("/seasons", s.handleStartSeason)
 
 			// Общие пресеты раскладки оверлея (сохранить/переключать шаблоны).
 			r.Get("/overlay/presets", s.handleListOverlayPresets)

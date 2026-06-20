@@ -9,12 +9,24 @@ func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	if mode != "2x2" {
 		mode = "1x1"
 	}
-	rows, err := s.Store.Leaderboard(r.Context(), mode)
+	// season: "all" — за всё время; пусто — текущий активный сезон; иначе конкретный id.
+	season := r.URL.Query().Get("season")
+	seasonID := season
+	if season == "all" {
+		seasonID = ""
+	} else if season == "" {
+		if active, err := s.Store.ActiveSeason(r.Context()); err == nil {
+			seasonID = active.ID
+		} else {
+			seasonID = "" // активного нет — показываем за всё время
+		}
+	}
+	rows, err := s.Store.Leaderboard(r.Context(), mode, seasonID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "rows": rows})
+	writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "seasonId": seasonID, "rows": rows})
 }
 
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
