@@ -320,11 +320,12 @@ type LiveState struct {
 // позициями/прозрачностью + глобальные настройки сцены. Хранится внутри того же
 // jsonb live_state, отдельной таблицы/эндпоинта не требует.
 type OverlayLayout struct {
-	Version int              `json:"version"`
-	Accent  string           `json:"accent,omitempty"` // глобальный акцент (переопределяет --primary)
-	StageBg OverlayBg        `json:"stageBg"`          // глобальный фон сцены (затемнение)
-	Pad     float64          `json:"pad,omitempty"`    // отступ от края (px сцены) при выравнивании по краю; 0 = дефолт
-	Widgets []WidgetInstance `json:"widgets"`
+	Version        int              `json:"version"`
+	Accent         string           `json:"accent,omitempty"`         // глобальный акцент (переопределяет --primary)
+	StageBg        OverlayBg        `json:"stageBg"`                  // глобальный фон сцены (затемнение)
+	Pad            float64          `json:"pad,omitempty"`            // отступ от края (px сцены) при выравнивании по краю; 0 = дефолт
+	ActivePresetID string           `json:"activePresetId,omitempty"` // выбранный общий пресет (server-side, одинаков на всех устройствах)
+	Widgets        []WidgetInstance `json:"widgets"`
 }
 
 // OverlayBg — настройка фона (вкл/выкл + прозрачность 0..1). Используется и для

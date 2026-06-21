@@ -69,6 +69,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/players/{login}", s.handleGetPlayer)
 		r.Get("/rules", s.handleRules)
 		r.Get("/overlay/state", s.handleGetOverlayState)
+		r.Get("/overlay/layout", s.handleGetOverlayLayout)
 		r.Get("/ws/overlay", s.handleOverlayWS)
 		r.Get("/highlights", s.handleListHighlights)
 		r.Get("/media/*", s.handleServeMedia)

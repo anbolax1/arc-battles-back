@@ -84,6 +84,20 @@ func (s *Server) handleGetOverlayState(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, s.overlayStateBytes(r.Context()))
 }
 
+// handleGetOverlayLayout — общая раскладка оверлея для редактора (источник правды — БД).
+// В отличие от /overlay/state отдаёт СЫРОЙ сохранённый layout из live_state и не зависит
+// от того, есть ли сейчас live-турнир, — чтобы организатор грузил один и тот же оверлей с
+// любого устройства. Нет сохранённой раскладки → "{}" (фронт подставит дефолт).
+func (s *Server) handleGetOverlayLayout(w http.ResponseWriter, r *http.Request) {
+	data, _ := s.Store.GetLiveState(r.Context())
+	var stored models.LiveState
+	if err := json.Unmarshal(data, &stored); err == nil && stored.Layout != nil {
+		writeJSON(w, http.StatusOK, stored.Layout)
+		return
+	}
+	writeRaw(w, http.StatusOK, []byte("{}"))
+}
+
 func (s *Server) handlePutOverlayState(w http.ResponseWriter, r *http.Request) {
 	var ls models.LiveState
 	if err := readJSON(r, &ls); err != nil {
