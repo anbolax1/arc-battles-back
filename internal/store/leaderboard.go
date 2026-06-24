@@ -14,10 +14,13 @@ import (
 //
 // seasonID="" — рейтинг за всё время (без фильтра); иначе только турниры этого сезона.
 func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]models.LeaderboardRow, error) {
+	// MMR — сквозной по сезонам (старт 1000); сезонный фильтр влияет на состав участников и
+	// агрегаты wins/tournaments/points. Сортировка по MMR, затем по победам.
 	var q string
 	if mode == "2x2" {
 		q = `
 			SELECT u.id, u.login, u.display_name, u.avatar_url,
+			       COALESCE(um.mmr, 1000)::int AS mmr,
 			       COALESCE(SUM(p.total_points), 0)::int AS points,
 			       COUNT(DISTINCT CASE WHEN t.winner_participant_id = p.id THEN t.id END)::int AS wins,
 			       COUNT(DISTINCT p.tournament_id)::int AS tournaments
@@ -26,11 +29,13 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 			   AND ($1 = '' OR t.season_id = $1)
 			JOIN LATERAL jsonb_array_elements(p.members) m ON true
 			JOIN users u ON u.id = (m->>'userId')
-			GROUP BY u.id, u.login, u.display_name, u.avatar_url
-			ORDER BY points DESC, wins DESC`
+			LEFT JOIN user_mmr um ON um.user_id = u.id AND um.mode = '2x2'
+			GROUP BY u.id, u.login, u.display_name, u.avatar_url, um.mmr
+			ORDER BY mmr DESC, wins DESC`
 	} else {
 		q = `
 			SELECT u.id, u.login, u.display_name, u.avatar_url,
+			       COALESCE(um.mmr, 1000)::int AS mmr,
 			       COALESCE(SUM(p.total_points), 0)::int AS points,
 			       COUNT(DISTINCT CASE WHEN t.winner_participant_id = p.id THEN t.id END)::int AS wins,
 			       COUNT(DISTINCT p.tournament_id)::int AS tournaments
@@ -38,9 +43,10 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 			JOIN tournaments t ON t.id = p.tournament_id AND t.mode = '1x1' AND t.status = 'finished'
 			   AND ($1 = '' OR t.season_id = $1)
 			JOIN users u ON u.id = p.user_id
+			LEFT JOIN user_mmr um ON um.user_id = u.id AND um.mode = '1x1'
 			WHERE p.kind = 'player'
-			GROUP BY u.id, u.login, u.display_name, u.avatar_url
-			ORDER BY points DESC, wins DESC`
+			GROUP BY u.id, u.login, u.display_name, u.avatar_url, um.mmr
+			ORDER BY mmr DESC, wins DESC`
 	}
 
 	rows, err := s.Pool.Query(ctx, q, seasonID)
@@ -52,7 +58,7 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 	out := []models.LeaderboardRow{}
 	for rows.Next() {
 		var r models.LeaderboardRow
-		if err := rows.Scan(&r.UserID, &r.Login, &r.DisplayName, &r.AvatarURL, &r.Points, &r.Wins, &r.Tournaments); err != nil {
+		if err := rows.Scan(&r.UserID, &r.Login, &r.DisplayName, &r.AvatarURL, &r.Mmr, &r.Points, &r.Wins, &r.Tournaments); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
