@@ -105,8 +105,9 @@ func (s *Store) participantBreakdown(ctx context.Context, participantID string) 
 		return b, err
 	}
 	// Контракты: свой выполненный = 2, выполненный контракт противника = 1.
+	// Касты $2::int/$3::int обязательны: без них Postgres трактует параметры как text → SUM(text) падает.
 	if err := s.Pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(CASE WHEN participant_id = $1 THEN $2 ELSE $3 END), 0)
+		SELECT COALESCE(SUM(CASE WHEN participant_id = $1 THEN $2::int ELSE $3::int END), 0)
 		FROM round_bonus_tasks
 		WHERE completed_by = $1`, participantID, ContractOwnPoints, ContractCrossPoints).Scan(&b.Contracts); err != nil {
 		return b, err
