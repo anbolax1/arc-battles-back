@@ -157,8 +157,14 @@ func (s *Store) MarkContract(ctx context.Context, id, by string) ([]string, erro
 	var target *string
 	switch by {
 	case "owner":
+		// Зачёт владельцем имеет приоритет: ставится всегда и отменяет балл противника (перетирает completed_by).
 		target = &owner
 	case "opponent":
+		// Балл за контракт противника засчитывается, ТОЛЬКО если владелец сам его не выполнил
+		// (иначе зачёт владельцем уже занял контракт — красть нечего).
+		if prev != nil && *prev == owner {
+			return nil, ErrConflict
+		}
 		opp, err := s.OpponentParticipant(ctx, roundID, owner)
 		if err != nil {
 			return nil, err

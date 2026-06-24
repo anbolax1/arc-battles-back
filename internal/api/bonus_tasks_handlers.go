@@ -91,13 +91,17 @@ func (s *Server) handleMarkContract(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
+	if b.By != "owner" && b.By != "opponent" && b.By != "none" && b.By != "" {
+		writeError(w, http.StatusBadRequest, "by должен быть owner, opponent или none")
+		return
+	}
 	affected, err := s.Store.MarkContract(r.Context(), chi.URLParam(r, "id"), b.By)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "контракт не найден")
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusBadRequest, "by должен быть owner, opponent или none")
+		writeError(w, http.StatusConflict, "владелец уже выполнил этот контракт — балл противнику недоступен")
 		return
 	}
 	if err != nil {

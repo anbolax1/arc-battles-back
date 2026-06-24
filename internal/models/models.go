@@ -282,13 +282,14 @@ type LiveStanding struct {
 	RoundPoints   int    `json:"roundPoints"` // очки за текущий раунд (для опции в табло)
 }
 
-// LiveBonus — бонусное задание стороны в оверлее (виджет «Бонусные»).
+// LiveBonus — контракт стороны в оверлее (виджет «Контракты»).
 type LiveBonus struct {
 	Text      string `json:"text"`
 	Points    int    `json:"points"`
-	ValueType string `json:"valueType"` // fixed | percent
-	Times     int    `json:"times"`     // сколько раз зачтено (0 — ещё нет)
-	Who       string `json:"who,omitempty"`
+	ValueType string `json:"valueType"`          // fixed | percent
+	Times     int    `json:"times"`              // 0 — не зачтён, >0 — зачтён (для подсветки)
+	Who       string `json:"who,omitempty"`      // имя стороны-владельца контракта
+	Opponent  bool   `json:"opponent,omitempty"` // контракт противника фокусной стороны (для опции «показывать контракты противника»)
 }
 
 // LiveState — состояние оверлея, которым управляет организатор и которое стримится в OBS.
@@ -362,10 +363,11 @@ type WidgetInstance struct {
 	Z              int             `json:"z"`
 	Visible        bool            `json:"visible"`
 	Locked         bool            `json:"locked,omitempty"`
-	HideTitle      bool            `json:"hideTitle,omitempty"`      // скрыть заголовок/подпись виджета
-	HidePenalty    bool            `json:"hidePenalty,omitempty"`    // усложнения: не показывать плашку «ШТРАФ» при нарушении
-	ShowRoundScore bool            `json:"showRoundScore,omitempty"` // табло: очки за раунд в скобках у счёта
-	Anchor         string          `json:"anchor,omitempty"`         // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
+	HideTitle      bool            `json:"hideTitle,omitempty"`             // скрыть заголовок/подпись виджета
+	HidePenalty    bool            `json:"hidePenalty,omitempty"`           // усложнения: не показывать плашку «ШТРАФ» при нарушении
+	ShowRoundScore bool            `json:"showRoundScore,omitempty"`        // табло: очки за раунд в скобках у счёта
+	ShowOpponentCs bool            `json:"showOpponentContracts,omitempty"` // контракты: показывать и контракты противника
+	Anchor         string          `json:"anchor,omitempty"`                // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
 	Bg             OverlayBg       `json:"bg"`
 	Accent         string          `json:"accent,omitempty"`
 	Props          json.RawMessage `json:"props,omitempty"` // пер-типовые доп.поля (текст, url логотипа и т.п.)
