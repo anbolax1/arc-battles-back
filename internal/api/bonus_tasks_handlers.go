@@ -44,7 +44,7 @@ func (s *Server) handleAssignBonusTask(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := s.Store.AssignBonusTask(r.Context(), roundID, b.ParticipantID, b.TaskID)
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, "этот контракт у участника уже есть")
+		writeError(w, http.StatusConflict, "этот контракт уже разыгран в этом турнире")
 		return
 	}
 	if err != nil {

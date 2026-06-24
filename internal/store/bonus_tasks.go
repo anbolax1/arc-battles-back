@@ -54,16 +54,17 @@ func (s *Store) bonusByKey(ctx context.Context, roundID, participantID, taskID s
 }
 
 // AssignBonusTask выдаёт участнику контракт на раунд (ручное добавление организатором).
-// ErrConflict — если этот контракт у участника в турнире уже есть (не повторяются).
+// ErrConflict — если этот контракт уже разыгран в ЭТОМ турнире (любой стороной): контракты
+// в рамках турнира не повторяются.
 func (s *Store) AssignBonusTask(ctx context.Context, roundID, participantID, taskID string) (models.RoundBonusTask, error) {
 	var dup bool
 	if err := s.Pool.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM round_bonus_tasks rbt
 			JOIN rounds r ON r.id = rbt.round_id
-			WHERE rbt.participant_id = $1 AND rbt.task_id = $2
-			  AND r.tournament_id = (SELECT tournament_id FROM rounds WHERE id = $3)
-		)`, participantID, taskID, roundID).Scan(&dup); err != nil {
+			WHERE rbt.task_id = $1
+			  AND r.tournament_id = (SELECT tournament_id FROM rounds WHERE id = $2)
+		)`, taskID, roundID).Scan(&dup); err != nil {
 		return models.RoundBonusTask{}, err
 	}
 	if dup {
@@ -79,7 +80,8 @@ func (s *Store) AssignBonusTask(ctx context.Context, roundID, participantID, tas
 }
 
 // DealContracts выдаёт участнику до count случайных контрактов из пула, совместимых с типом
-// игроков турнира (pvpve — любые; pve/pvp — свои + универсальные pvpve), исключая уже выданные.
+// игроков турнира (pvpve — любые; pve/pvp — свои + универсальные pvpve), исключая уже разыгранные
+// в ЭТОМ турнире ЛЮБОЙ стороной (контракты в рамках турнира не повторяются).
 func (s *Store) DealContracts(ctx context.Context, roundID, participantID string, count int) ([]models.RoundBonusTask, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT ct.id
@@ -90,10 +92,10 @@ func (s *Store) DealContracts(ctx context.Context, roundID, participantID string
 		  AND ct.id NOT IN (
 		      SELECT rbt.task_id FROM round_bonus_tasks rbt
 		      JOIN rounds r2 ON r2.id = rbt.round_id
-		      WHERE rbt.participant_id = $2 AND r2.tournament_id = t.id
+		      WHERE r2.tournament_id = t.id
 		  )
 		ORDER BY random()
-		LIMIT $3`, roundID, participantID, count)
+		LIMIT $2`, roundID, count)
 	if err != nil {
 		return nil, err
 	}
