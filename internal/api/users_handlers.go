@@ -149,8 +149,12 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	mmrSolo, _ := s.Store.GetUserMmr(r.Context(), u.ID, "1x1")
+	mmrDuo, _ := s.Store.GetUserMmr(r.Context(), u.ID, "2x2")
 	writeJSON(w, http.StatusOK, models.PlayerProfile{
 		User:        u,
+		MmrSolo:     mmrSolo,
+		MmrDuo:      mmrDuo,
 		Points:      points,
 		Wins:        wins,
 		Tournaments: tournaments,

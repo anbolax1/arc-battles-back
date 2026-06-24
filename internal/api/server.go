@@ -68,6 +68,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/seasons", s.handleListSeasons)
 		r.Get("/players/{login}", s.handleGetPlayer)
 		r.Get("/rules", s.handleRules)
+		r.Get("/legendary", s.handleListLegendary)
 		r.Get("/overlay/state", s.handleGetOverlayState)
 		r.Get("/overlay/layout", s.handleGetOverlayLayout)
 		r.Get("/ws/overlay", s.handleOverlayWS)
@@ -125,6 +126,13 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/catalog/complications/{id}", s.handleUpdateComplication)
 			r.Delete("/catalog/complications/{id}", s.handleDeleteComplication)
 
+			// Легендарные контракты: каталог + отметка выполнения (навсегда) / возврат в пул.
+			r.Post("/catalog/legendary", s.handleCreateLegendary)
+			r.Patch("/catalog/legendary/{id}", s.handleUpdateLegendary)
+			r.Delete("/catalog/legendary/{id}", s.handleDeleteLegendary)
+			r.Post("/legendary/{id}/complete", s.handleCompleteLegendary)
+			r.Post("/legendary/{id}/reopen", s.handleUncompleteLegendary)
+
 			// Стартовые задания: пул (скрыт от публики), распределение по раундам, зачёт в эфире.
 			r.Get("/starter-tasks", s.handleListStarterTasks)
 			r.Post("/starter-tasks", s.handleCreateStarterTask)
@@ -135,14 +143,16 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/round-starter-tasks/{id}", s.handleUnassignRoundTask)
 			r.Post("/round-starter-tasks/{id}/count", s.handleAdjustRoundTaskCount)
 
-			// Штрафы-усложнения участнику в раунде (счётчик применений).
+			// Протоколы сторон в раунде (1 на игрока без повторов + счётчик нарушений-минут; на очки НЕ влияют).
 			r.Get("/tournaments/{id}/penalties", s.handleListTournamentPenalties)
-			r.Post("/rounds/{id}/penalties/count", s.handleAdjustRoundPenalty)
+			r.Post("/rounds/{id}/protocol", s.handleSetProtocol)
+			r.Post("/rounds/{id}/protocol/violations", s.handleAdjustProtocolViolations)
 
-			// Бонусные задания участников по раундам (выбор + отметка выполнения, перенос).
+			// Контракты участников по раундам (раздача 2 случайных, ручная выдача, кросс-зачёт +2/+1).
 			r.Get("/tournaments/{id}/bonus-tasks", s.handleListTournamentBonusTasks)
 			r.Post("/rounds/{id}/bonus-tasks", s.handleAssignBonusTask)
-			r.Post("/round-bonus-tasks/{id}/count", s.handleAdjustBonusCount)
+			r.Post("/rounds/{id}/contracts/deal", s.handleDealContracts)
+			r.Post("/round-bonus-tasks/{id}/complete", s.handleMarkContract)
 			r.Delete("/round-bonus-tasks/{id}", s.handleRemoveBonusTask)
 
 			// Хайлайты: модерация (очередь, одобрить/отклонить, удалить).

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/battle-for-respect/backend/internal/models"
+	"github.com/battle-for-respect/backend/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 )
@@ -50,7 +51,7 @@ func (b taskBody) toModel() (models.CatalogTask, string, bool) {
 		Text:      strings.TrimSpace(b.Text),
 		Points:    b.Points,
 		ValueType: vt,
-		Kind:      defaultStr(b.Kind, "mixed"),
+		Kind:      store.NormalizePlayerType(b.Kind),
 		Source:    defaultStr(b.Source, "official"),
 		Author:    strings.TrimSpace(b.Author),
 		Title:     strings.TrimSpace(b.Title),

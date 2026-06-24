@@ -33,11 +33,11 @@ func (s *Server) handleGetTournament(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateTournament(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title       string     `json:"title"`
-		Mode        string     `json:"mode"`
-		TotalRounds int        `json:"totalRounds"`
-		Maps        []string   `json:"maps"`
-		StartsAt    *time.Time `json:"startsAt"`
+		Title      string     `json:"title"`
+		Mode       string     `json:"mode"`
+		PlayerType string     `json:"playerType"`
+		Maps       []string   `json:"maps"`
+		StartsAt   *time.Time `json:"startsAt"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
@@ -47,12 +47,13 @@ func (s *Server) handleCreateTournament(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "укажите название турнира")
 		return
 	}
+	// Ровно 1 раунд на турнир — фиксируется в store (TotalRounds игнорируется).
 	t, err := s.Store.CreateTournament(r.Context(), models.Tournament{
-		Title:       strings.TrimSpace(body.Title),
-		Mode:        body.Mode,
-		TotalRounds: body.TotalRounds,
-		Maps:        body.Maps,
-		StartsAt:    body.StartsAt,
+		Title:      strings.TrimSpace(body.Title),
+		Mode:       body.Mode,
+		PlayerType: body.PlayerType,
+		Maps:       body.Maps,
+		StartsAt:   body.StartsAt,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -67,6 +68,7 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 		Status              *string         `json:"status"`
 		WinnerParticipantID *string         `json:"winnerParticipantId"`
 		Title               *string         `json:"title"`
+		PlayerType          *string         `json:"playerType"`
 		StartsAt            json.RawMessage `json:"startsAt"` // ключ присутствует → ставим (null = очистить); отсутствует → не трогаем
 	}
 	if err := readJSON(r, &body); err != nil {
@@ -74,8 +76,8 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Правка «шапки»: название и/или время начала.
-	if body.Title != nil || body.StartsAt != nil {
+	// Правка «шапки»: название, тип игроков и/или время начала.
+	if body.Title != nil || body.PlayerType != nil || body.StartsAt != nil {
 		var title *string
 		if body.Title != nil {
 			t := strings.TrimSpace(*body.Title)
@@ -98,7 +100,7 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 				startsAt = &ts
 			}
 		}
-		if err := s.Store.UpdateTournamentMeta(r.Context(), id, title, startsAtSet, startsAt); errors.Is(err, store.ErrNotFound) {
+		if err := s.Store.UpdateTournamentMeta(r.Context(), id, title, body.PlayerType, startsAtSet, startsAt); errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "турнир не найден")
 			return
 		} else if err != nil {
@@ -120,12 +122,14 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		// Авто-победитель: при «завершён» — сторона с макс. очками (если не задан явно).
-		// При возврате из «завершён» в другой статус — снимаем победителя.
+		// При возврате из «завершён» в другой статус — снимаем победителя и откатываем MMR.
 		if *body.Status == "finished" {
 			if body.WinnerParticipantID == nil {
 				_ = s.Store.SetWinnerTop(r.Context(), id)
+				_ = s.Store.ApplyTournamentMmr(r.Context(), id)
 			}
 		} else {
+			_ = s.Store.RevertTournamentMmr(r.Context(), id)
 			_ = s.Store.ClearWinner(r.Context(), id)
 		}
 	}
@@ -134,6 +138,8 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// Явный победитель → турнир завершён → пересчитываем MMR.
+		_ = s.Store.ApplyTournamentMmr(r.Context(), id)
 	}
 	t, err := s.Store.GetTournament(r.Context(), id)
 	if err != nil {
