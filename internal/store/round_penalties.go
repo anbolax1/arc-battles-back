@@ -2,18 +2,24 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/battle-for-respect/backend/internal/models"
+	"github.com/jackc/pgx/v5"
 )
 
-// ListTournamentPenalties — все применённые усложнения по всем раундам турнира (times>0).
+// Протоколы (бывш. усложнения). На игрока действует РОВНО ОДИН протокол за турнир, без повторов
+// между сторонами. Штраф = минуты в рейде за нарушение (times = число нарушений = минут); на ОЧКИ
+// НЕ влияет. Хранится в round_penalties (round_id, participant_id, complication_id, times).
+
+// ListTournamentPenalties — протоколы сторон по раундам турнира (с числом нарушений times).
 func (s *Store) ListTournamentPenalties(ctx context.Context, tournamentID string) ([]models.RoundPenalty, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT rp.id, rp.round_id, rp.participant_id, rp.complication_id, c.text, c.penalty, c.value_type, rp.times
 		FROM round_penalties rp
 		JOIN catalog_complications c ON c.id = rp.complication_id
 		JOIN rounds r ON r.id = rp.round_id
-		WHERE r.tournament_id = $1 AND rp.times > 0
+		WHERE r.tournament_id = $1
 		ORDER BY r.number, c.text`, tournamentID)
 	if err != nil {
 		return nil, err
@@ -31,23 +37,52 @@ func (s *Store) ListTournamentPenalties(ctx context.Context, tournamentID string
 	return out, rows.Err()
 }
 
-// AdjustRoundPenaltyCount меняет счётчик применений усложнения участнику в раунде на delta
-// (clamp ≥0). Строка с нулём удаляется. Возвращает новый times.
-func (s *Store) AdjustRoundPenaltyCount(ctx context.Context, roundID, participantID, complicationID string, delta int) (int, error) {
+// SetParticipantProtocol назначает участнику РОВНО ОДИН протокол в раунде (заменяет прежний,
+// сбрасывая счётчик нарушений). complicationID="" — снять протокол. ErrConflict — если этот
+// протокол уже действует на другую сторону (без повторов в рамках раунда).
+func (s *Store) SetParticipantProtocol(ctx context.Context, roundID, participantID, complicationID string) error {
+	if complicationID == "" {
+		_, err := s.Pool.Exec(ctx,
+			`DELETE FROM round_penalties WHERE round_id = $1 AND participant_id = $2`, roundID, participantID)
+		return err
+	}
+	var taken bool
+	if err := s.Pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM round_penalties
+			WHERE round_id = $1 AND complication_id = $2 AND participant_id <> $3)`,
+		roundID, complicationID, participantID).Scan(&taken); err != nil {
+		return err
+	}
+	if taken {
+		return ErrConflict
+	}
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM round_penalties WHERE round_id = $1 AND participant_id = $2`, roundID, participantID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO round_penalties (round_id, participant_id, complication_id, times) VALUES ($1, $2, $3, 0)`,
+		roundID, participantID, complicationID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// AdjustProtocolViolations меняет число нарушений (= минут штрафа) протокола стороны на delta
+// (clamp ≥0). ErrNotFound — если у стороны протокол не назначен. Возвращает новое число нарушений.
+func (s *Store) AdjustProtocolViolations(ctx context.Context, roundID, participantID string, delta int) (int, error) {
 	var times int
 	err := s.Pool.QueryRow(ctx, `
-		INSERT INTO round_penalties (round_id, participant_id, complication_id, times)
-		VALUES ($1, $2, $3, GREATEST($4, 0))
-		ON CONFLICT (round_id, participant_id, complication_id) DO UPDATE
-			SET times = GREATEST(round_penalties.times + $4, 0)
-		RETURNING times`, roundID, participantID, complicationID, delta).Scan(&times)
-	if err != nil {
-		return 0, err
+		UPDATE round_penalties SET times = GREATEST(times + $3, 0)
+		WHERE round_id = $1 AND participant_id = $2
+		RETURNING times`, roundID, participantID, delta).Scan(&times)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
 	}
-	if times == 0 {
-		_, _ = s.Pool.Exec(ctx,
-			`DELETE FROM round_penalties WHERE round_id = $1 AND participant_id = $2 AND complication_id = $3`,
-			roundID, participantID, complicationID)
-	}
-	return times, nil
+	return times, err
 }
