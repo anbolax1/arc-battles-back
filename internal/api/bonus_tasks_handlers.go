@@ -9,7 +9,16 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// GET /api/tournaments/{id}/bonus-tasks — бонусные задания участников по раундам. Organizer-only.
+// recomputeMany пересчитывает очки нескольких участников (молча игнорирует ошибки отдельных).
+func (s *Server) recomputeMany(r *http.Request, ids []string) {
+	for _, id := range ids {
+		if id != "" {
+			_, _ = s.Store.RecomputeParticipantPoints(r.Context(), id)
+		}
+	}
+}
+
+// GET /api/tournaments/{id}/bonus-tasks — контракты участников по раундам. Organizer-only.
 func (s *Server) handleListTournamentBonusTasks(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Store.ListTournamentBonusTasks(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
@@ -19,7 +28,7 @@ func (s *Server) handleListTournamentBonusTasks(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, items)
 }
 
-// POST /api/rounds/{id}/bonus-tasks {participantId, taskId} — добавить участнику бонусное на раунд.
+// POST /api/rounds/{id}/bonus-tasks {participantId, taskId} — выдать участнику контракт (вручную).
 func (s *Server) handleAssignBonusTask(w http.ResponseWriter, r *http.Request) {
 	roundID := chi.URLParam(r, "id")
 	if st, err := s.Store.StatusByRound(r.Context(), roundID); err == nil && s.blockIfFinished(w, st) {
@@ -35,67 +44,84 @@ func (s *Server) handleAssignBonusTask(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := s.Store.AssignBonusTask(r.Context(), roundID, b.ParticipantID, b.TaskID)
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusConflict, "это бонусное задание у участника уже есть")
+		writeError(w, http.StatusConflict, "этот контракт у участника уже есть")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "не удалось добавить бонусное задание: "+err.Error())
+		writeError(w, http.StatusBadRequest, "не удалось выдать контракт: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, item)
 }
 
-// POST /api/round-bonus-tasks/{id}/count {delta} — счётчик зачётов бонусного задания (+1/−1).
-func (s *Server) handleAdjustBonusCount(w http.ResponseWriter, r *http.Request) {
+// POST /api/rounds/{id}/contracts/deal {participantId, count?} — раздать случайные контракты (по умолчанию 2).
+func (s *Server) handleDealContracts(w http.ResponseWriter, r *http.Request) {
+	roundID := chi.URLParam(r, "id")
+	if st, err := s.Store.StatusByRound(r.Context(), roundID); err == nil && s.blockIfFinished(w, st) {
+		return
+	}
+	var b struct {
+		ParticipantID string `json:"participantId"`
+		Count         int    `json:"count"`
+	}
+	if err := readJSON(r, &b); err != nil || strings.TrimSpace(b.ParticipantID) == "" {
+		writeError(w, http.StatusBadRequest, "укажите participantId")
+		return
+	}
+	if b.Count <= 0 {
+		b.Count = 2
+	}
+	items, err := s.Store.DealContracts(r.Context(), roundID, b.ParticipantID, b.Count)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+// POST /api/round-bonus-tasks/{id}/complete {by: owner|opponent|none} — отметить исполнителя контракта.
+func (s *Server) handleMarkContract(w http.ResponseWriter, r *http.Request) {
 	if st, err := s.Store.StatusByBonusAssignment(r.Context(), chi.URLParam(r, "id")); err == nil && s.blockIfFinished(w, st) {
 		return
 	}
 	var b struct {
-		Delta   int    `json:"delta"`
-		RoundID string `json:"roundId"`
+		By string `json:"by"`
 	}
 	if err := readJSON(r, &b); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	if b.Delta == 0 {
-		b.Delta = 1
-	}
-	// При зачёте (delta>0) задание «переезжает» на раунд, где его зачли по факту.
-	pid, times, err := s.Store.AdjustBonusTaskCount(r.Context(), chi.URLParam(r, "id"), b.Delta, b.RoundID)
+	affected, err := s.Store.MarkContract(r.Context(), chi.URLParam(r, "id"), b.By)
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "бонусное задание не найдено")
+		writeError(w, http.StatusNotFound, "контракт не найден")
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusBadRequest, "by должен быть owner, opponent или none")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	total, err := s.Store.RecomputeParticipantPoints(r.Context(), pid)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"times": times, "participantTotalPoints": total})
+	s.recomputeMany(r, affected)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// DELETE /api/round-bonus-tasks/{id} — убрать бонусное задание у участника.
+// DELETE /api/round-bonus-tasks/{id} — убрать контракт у участника.
 func (s *Server) handleRemoveBonusTask(w http.ResponseWriter, r *http.Request) {
 	if st, err := s.Store.StatusByBonusAssignment(r.Context(), chi.URLParam(r, "id")); err == nil && s.blockIfFinished(w, st) {
 		return
 	}
-	pid, err := s.Store.RemoveBonusTask(r.Context(), chi.URLParam(r, "id"))
+	affected, err := s.Store.RemoveBonusTask(r.Context(), chi.URLParam(r, "id"))
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "бонусное задание не найдено")
+		writeError(w, http.StatusNotFound, "контракт не найден")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := s.Store.RecomputeParticipantPoints(r.Context(), pid); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	s.recomputeMany(r, affected)
 	w.WriteHeader(http.StatusNoContent)
 }
