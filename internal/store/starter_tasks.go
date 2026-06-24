@@ -60,20 +60,13 @@ func (s *Store) DeleteStarterTask(ctx context.Context, id string) error {
 	return err
 }
 
-// ---- Назначения по раундам ----
+// ---- Назначения основных заданий по раундам (зачёт раздельный по сторонам) ----
 
-const rstCols = `rst.id, rst.round_id, rst.starter_task_id, st.text, st.points, rst.completed_by, rst.times`
-
-func scanRoundStarterTask(row pgx.Row) (models.RoundStarterTask, error) {
-	var t models.RoundStarterTask
-	err := row.Scan(&t.ID, &t.RoundID, &t.StarterTaskID, &t.Text, &t.Points, &t.CompletedBy, &t.Times)
-	return t, err
-}
-
-// ListTournamentStarterTasks возвращает все назначения стартовых заданий по всем раундам турнира.
+// ListTournamentStarterTasks возвращает назначения основных заданий по раундам турнира,
+// каждое — с зачётом по сторонам (Done: participantId → times).
 func (s *Store) ListTournamentStarterTasks(ctx context.Context, tournamentID string) ([]models.RoundStarterTask, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT `+rstCols+`
+		SELECT rst.id, rst.round_id, rst.starter_task_id, st.text, st.points
 		FROM round_starter_tasks rst
 		JOIN starter_tasks st ON st.id = rst.starter_task_id
 		JOIN rounds r ON r.id = rst.round_id
@@ -85,18 +78,58 @@ func (s *Store) ListTournamentStarterTasks(ctx context.Context, tournamentID str
 	defer rows.Close()
 
 	out := []models.RoundStarterTask{}
+	index := map[string]int{}
 	for rows.Next() {
-		t, err := scanRoundStarterTask(rows)
-		if err != nil {
+		var t models.RoundStarterTask
+		if err := rows.Scan(&t.ID, &t.RoundID, &t.StarterTaskID, &t.Text, &t.Points); err != nil {
 			return nil, err
 		}
+		t.Done = []models.RoundTaskDone{}
+		index[t.ID] = len(out)
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Зачёт по сторонам (times>0) для всех назначений турнира одним запросом.
+	dRows, err := s.Pool.Query(ctx, `
+		SELECT rstd.round_starter_task_id, rstd.participant_id, rstd.times
+		FROM round_starter_task_done rstd
+		JOIN round_starter_tasks rst ON rst.id = rstd.round_starter_task_id
+		JOIN rounds r ON r.id = rst.round_id
+		WHERE r.tournament_id = $1 AND rstd.times > 0`, tournamentID)
+	if err != nil {
+		return nil, err
+	}
+	defer dRows.Close()
+	for dRows.Next() {
+		var assignmentID string
+		var d models.RoundTaskDone
+		if err := dRows.Scan(&assignmentID, &d.ParticipantID, &d.Times); err != nil {
+			return nil, err
+		}
+		if i, ok := index[assignmentID]; ok {
+			out[i].Done = append(out[i].Done, d)
+		}
+	}
+	return out, dRows.Err()
 }
 
-// AssignTaskToRound назначает стартовое задание на раунд. Возвращает ErrConflict,
-// если это задание уже назначено на другой раунд того же турнира (не повторяются).
+func (s *Store) starterAssignmentByKey(ctx context.Context, roundID, starterTaskID string) (models.RoundStarterTask, error) {
+	var t models.RoundStarterTask
+	err := s.Pool.QueryRow(ctx, `
+		SELECT rst.id, rst.round_id, rst.starter_task_id, st.text, st.points
+		FROM round_starter_tasks rst
+		JOIN starter_tasks st ON st.id = rst.starter_task_id
+		WHERE rst.round_id = $1 AND rst.starter_task_id = $2`, roundID, starterTaskID).
+		Scan(&t.ID, &t.RoundID, &t.StarterTaskID, &t.Text, &t.Points)
+	t.Done = []models.RoundTaskDone{}
+	return t, err
+}
+
+// AssignTaskToRound назначает основное задание на раунд. ErrConflict — если задание уже
+// назначено на другой раунд того же турнира (не повторяются между раундами).
 func (s *Store) AssignTaskToRound(ctx context.Context, roundID, starterTaskID string) (models.RoundStarterTask, error) {
 	var dup bool
 	if err := s.Pool.QueryRow(ctx, `
@@ -117,56 +150,57 @@ func (s *Store) AssignTaskToRound(ctx context.Context, roundID, starterTaskID st
 		VALUES ($1, $2) ON CONFLICT (round_id, starter_task_id) DO NOTHING`, roundID, starterTaskID); err != nil {
 		return models.RoundStarterTask{}, err
 	}
-	return scanRoundStarterTask(s.Pool.QueryRow(ctx, `
-		SELECT `+rstCols+`
-		FROM round_starter_tasks rst
-		JOIN starter_tasks st ON st.id = rst.starter_task_id
-		WHERE rst.round_id = $1 AND rst.starter_task_id = $2`, roundID, starterTaskID))
+	return s.starterAssignmentByKey(ctx, roundID, starterTaskID)
 }
 
-// UnassignRoundTask снимает назначение. Возвращает tournamentID и participantID (если был зачёт)
-// для последующего пересчёта очков.
-func (s *Store) UnassignRoundTask(ctx context.Context, assignmentID string) (prevParticipant *string, err error) {
-	err = s.Pool.QueryRow(ctx,
-		`DELETE FROM round_starter_tasks WHERE id = $1 RETURNING completed_by`, assignmentID).Scan(&prevParticipant)
-	if errors.Is(err, pgx.ErrNoRows) {
+// UnassignRoundTask снимает назначение основного задания (каскадом — зачёты по сторонам).
+// Возвращает участников, у которых был зачёт, для пересчёта очков.
+func (s *Store) UnassignRoundTask(ctx context.Context, assignmentID string) ([]string, error) {
+	rows, err := s.Pool.Query(ctx,
+		`SELECT participant_id FROM round_starter_task_done WHERE round_starter_task_id = $1 AND times > 0`, assignmentID)
+	if err != nil {
+		return nil, err
+	}
+	affected := []string{}
+	for rows.Next() {
+		var pid string
+		if err := rows.Scan(&pid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		affected = append(affected, pid)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ct, err := s.Pool.Exec(ctx, `DELETE FROM round_starter_tasks WHERE id = $1`, assignmentID)
+	if err != nil {
+		return nil, err
+	}
+	if ct.RowsAffected() == 0 {
 		return nil, ErrNotFound
 	}
-	return prevParticipant, err
+	return affected, nil
 }
 
-// AdjustRoundTaskCount меняет счётчик зачётов задания на delta для участника (clamp ≥0).
-// Если times>0 — исполнитель = participantID; если 0 — снимается. Возвращает новый times
-// и предыдущего исполнителя (если он другой — его очки тоже надо пересчитать).
-func (s *Store) AdjustRoundTaskCount(ctx context.Context, assignmentID, participantID string, delta int) (newTimes int, prevOwner *string, err error) {
-	var owner *string
+// AdjustRoundTaskCount меняет счётчик зачётов основного задания стороной (participantID) на delta
+// (clamp ≥0). Возвращает новый times. Каждая сторона зачитывает независимо.
+func (s *Store) AdjustRoundTaskCount(ctx context.Context, assignmentID, participantID string, delta int) (int, error) {
 	var times int
-	err = s.Pool.QueryRow(ctx, `SELECT completed_by, times FROM round_starter_tasks WHERE id = $1`, assignmentID).Scan(&owner, &times)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, nil, ErrNotFound
-	}
+	err := s.Pool.QueryRow(ctx, `
+		INSERT INTO round_starter_task_done (round_starter_task_id, participant_id, times)
+		VALUES ($1, $2, GREATEST($3, 0))
+		ON CONFLICT (round_starter_task_id, participant_id) DO UPDATE
+			SET times = GREATEST(round_starter_task_done.times + $3, 0)
+		RETURNING times`, assignmentID, participantID, delta).Scan(&times)
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
-	cur := 0
-	if owner != nil && *owner == participantID {
-		cur = times
+	if times == 0 {
+		_, _ = s.Pool.Exec(ctx,
+			`DELETE FROM round_starter_task_done WHERE round_starter_task_id = $1 AND participant_id = $2`,
+			assignmentID, participantID)
 	}
-	newTimes = cur + delta
-	if newTimes < 0 {
-		newTimes = 0
-	}
-	var newOwner *string
-	if newTimes > 0 {
-		newOwner = &participantID
-	}
-	if _, err = s.Pool.Exec(ctx,
-		`UPDATE round_starter_tasks SET completed_by = $2, times = $3 WHERE id = $1`,
-		assignmentID, newOwner, newTimes); err != nil {
-		return 0, nil, err
-	}
-	if owner != nil && *owner != participantID {
-		prevOwner = owner // у прежнего исполнителя награда с этого задания обнулилась
-	}
-	return newTimes, prevOwner, nil
+	return times, nil
 }

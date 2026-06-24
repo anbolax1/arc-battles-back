@@ -34,13 +34,15 @@ type starterTaskBody struct {
 	Kind   string `json:"kind"`
 }
 
-// нормализует вид задания: pve | pvp | mixed (по умолчанию mixed).
+// нормализует вид задания: pve | pvp | pvpve (по умолчанию pvpve; legacy mixed → pvpve).
 func starterKind(k string) string {
 	switch k {
-	case "pve", "pvp", "mixed":
+	case "pve", "pvp", "pvpve":
 		return k
+	case "mixed":
+		return "pvpve"
 	default:
-		return "mixed"
+		return "pvpve"
 	}
 }
 
@@ -136,7 +138,7 @@ func (s *Server) handleUnassignRoundTask(w http.ResponseWriter, r *http.Request)
 	if st, err := s.Store.StatusByStarterAssignment(r.Context(), chi.URLParam(r, "id")); err == nil && s.blockIfFinished(w, st) {
 		return
 	}
-	prev, err := s.Store.UnassignRoundTask(r.Context(), chi.URLParam(r, "id"))
+	affected, err := s.Store.UnassignRoundTask(r.Context(), chi.URLParam(r, "id"))
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "назначение не найдено")
 		return
@@ -145,7 +147,7 @@ func (s *Server) handleUnassignRoundTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.recomputeIfSet(r, prev)
+	s.recomputeMany(r, affected)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -166,7 +168,7 @@ func (s *Server) handleAdjustRoundTaskCount(w http.ResponseWriter, r *http.Reque
 	if b.Delta == 0 {
 		b.Delta = 1
 	}
-	times, prevOwner, err := s.Store.AdjustRoundTaskCount(r.Context(), chi.URLParam(r, "id"), b.ParticipantID, b.Delta)
+	times, err := s.Store.AdjustRoundTaskCount(r.Context(), chi.URLParam(r, "id"), b.ParticipantID, b.Delta)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "назначение не найдено")
 		return
@@ -175,7 +177,6 @@ func (s *Server) handleAdjustRoundTaskCount(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "не удалось зачесть задание: "+err.Error())
 		return
 	}
-	s.recomputeIfSet(r, prevOwner) // у прежнего исполнителя награда обнулилась
 	total, err := s.Store.RecomputeParticipantPoints(r.Context(), b.ParticipantID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
