@@ -181,9 +181,9 @@ func (s *Store) PlayerAggregate(ctx context.Context, userID string) (models.Play
 			return st, err
 		}
 		st.BasePoints += b.Base
-		st.StarterPoints += b.Starter
-		st.BonusPoints += b.BonusFixed + b.BonusPercent
-		st.PenaltyPoints += b.Penalty
+		st.MainPoints += b.Main
+		st.ContractPoints += b.Contracts
+		st.LegendaryPoints += b.Legendary
 	}
 
 	// любимая карта — где сыграно больше всего раундов

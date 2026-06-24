@@ -58,6 +58,7 @@ type Tournament struct {
 	ID                  string        `json:"id"`
 	Title               string        `json:"title"`
 	Mode                string        `json:"mode"`
+	PlayerType          string        `json:"playerType"` // pve | pvp | pvpve — тип игроков (пул основных заданий/контрактов)
 	Status              string        `json:"status"`
 	TotalRounds         int           `json:"totalRounds"`
 	Maps                []string      `json:"maps"`
@@ -123,7 +124,8 @@ type LeaderboardRow struct {
 	Login       string `json:"login"`
 	DisplayName string `json:"displayName"`
 	AvatarURL   string `json:"avatarUrl"`
-	Points      int    `json:"points"`
+	Mmr         int    `json:"mmr"`    // рейтинг по исходам (старт 1000, сквозной по сезонам)
+	Points      int    `json:"points"` // сумма набранных баллов за сезон (вторично, для контекста)
 	Wins        int    `json:"wins"`
 	Tournaments int    `json:"tournaments"`
 }
@@ -152,11 +154,11 @@ type PlayerStats struct {
 	StreakKind string `json:"streakKind"`
 	StreakLen  int    `json:"streakLen"`
 
-	// Источники очков (суммарно). PenaltyPoints — сколько вычтено (число ≥0).
-	BasePoints    int `json:"basePoints"`
-	StarterPoints int `json:"starterPoints"`
-	BonusPoints   int `json:"bonusPoints"`
-	PenaltyPoints int `json:"penaltyPoints"`
+	// Источники очков (суммарно по завершённым турнирам).
+	BasePoints      int `json:"basePoints"`      // ручная корректировка раунда (round_entries.points)
+	MainPoints      int `json:"mainPoints"`      // основные задания раунда
+	ContractPoints  int `json:"contractPoints"`  // контракты (свои 2 + чужие 1)
+	LegendaryPoints int `json:"legendaryPoints"` // легендарные контракты (10 каждый)
 
 	FavoriteMap       string `json:"favoriteMap"`
 	FavoriteMapRounds int    `json:"favoriteMapRounds"`
@@ -165,6 +167,8 @@ type PlayerStats struct {
 // PlayerProfile — публичный профиль игрока: пользователь + статы + история (B6).
 type PlayerProfile struct {
 	User        User                `json:"user"`
+	MmrSolo     int                 `json:"mmrSolo"` // MMR в режиме 1x1 (старт 1000)
+	MmrDuo      int                 `json:"mmrDuo"`  // MMR в режиме 2x2 (старт 1000)
 	Points      int                 `json:"points"`
 	Wins        int                 `json:"wins"`
 	Tournaments int                 `json:"tournaments"`
@@ -375,31 +379,67 @@ type StarterTask struct {
 	Kind   string `json:"kind"` // pve | pvp | mixed
 }
 
-// RoundStarterTask — стартовое задание, назначенное на раунд. times — сколько раз зачтено
-// (баллы = times × points), completedBy — кому. Text/Points — из starter_tasks для кабинета.
+// RoundStarterTask — основное задание раунда (одинаково у обеих сторон). Зачёт раздельный по
+// сторонам: Done = participantId → сколько раз зачтено (баллы стороне = times × points).
 type RoundStarterTask struct {
-	ID            string  `json:"id"`
-	RoundID       string  `json:"roundId"`
-	StarterTaskID string  `json:"starterTaskId"`
-	Text          string  `json:"text"`
-	Points        int     `json:"points"`
-	CompletedBy   *string `json:"completedBy,omitempty"`
-	Times         int     `json:"times"`
+	ID            string          `json:"id"`
+	RoundID       string          `json:"roundId"`
+	StarterTaskID string          `json:"starterTaskId"`
+	Text          string          `json:"text"`
+	Points        int             `json:"points"`
+	Done          []RoundTaskDone `json:"done"`
+}
+
+// RoundTaskDone — зачёт основного задания конкретной стороной.
+type RoundTaskDone struct {
+	ParticipantID string `json:"participantId"`
+	Times         int    `json:"times"`
 }
 
 // RoundBonusTask — бонусное задание участника в раунде. times — сколько раз зачтено
 // (0 → не выполнено, переносится; баллы = times × величина). roundNumber — в каком раунде выбрано
 // (для «перенесено из раунда N»). Text/Points/ValueType — из catalog_tasks.
 type RoundBonusTask struct {
-	ID            string `json:"id"`
-	RoundID       string `json:"roundId"`
-	RoundNumber   int    `json:"roundNumber"`
-	ParticipantID string `json:"participantId"`
-	TaskID        string `json:"taskId"`
-	Text          string `json:"text"`
-	Points        int    `json:"points"`
-	ValueType     string `json:"valueType"`
-	Times         int    `json:"times"`
+	ID            string  `json:"id"`
+	RoundID       string  `json:"roundId"`
+	RoundNumber   int     `json:"roundNumber"`
+	ParticipantID string  `json:"participantId"` // владелец контракта (кому выдан)
+	TaskID        string  `json:"taskId"`
+	Text          string  `json:"text"`
+	Points        int     `json:"points"`
+	ValueType     string  `json:"valueType"`
+	Kind          string  `json:"kind"`                  // pve | pvp | pvpve
+	Times         int     `json:"times"`                 // legacy-счётчик (не используется в скоринге контрактов)
+	CompletedBy   *string `json:"completedBy,omitempty"` // кто выполнил: владелец → +2, противник → +1, nil → не выполнен
+}
+
+// CatalogLegendary — легендарный контракт (глобальный пул, 10 баллов, выполним один раз навсегда).
+type CatalogLegendary struct {
+	ID        string `json:"id"`
+	Text      string `json:"text"`
+	Points    int    `json:"points"`
+	Kind      string `json:"kind"`   // pve | pvp | pvpve
+	Source    string `json:"source"` // official | boosty
+	Author    string `json:"author,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Status    string `json:"status"` // available | done
+	SortOrder int    `json:"-"`
+
+	// Данные о выполнении (если status=done) — для журнала/публички.
+	Completion *LegendaryCompletion `json:"completion,omitempty"`
+}
+
+// LegendaryCompletion — запись о выполнении легендарного контракта (ник/дата/карта).
+type LegendaryCompletion struct {
+	ID                  string    `json:"id"`
+	LegendaryContractID string    `json:"legendaryContractId"`
+	UserID              *string   `json:"userId,omitempty"`
+	ParticipantID       *string   `json:"participantId,omitempty"`
+	Nickname            string    `json:"nickname"`
+	TournamentID        *string   `json:"tournamentId,omitempty"`
+	Map                 string    `json:"map,omitempty"`
+	CompletedAt         time.Time `json:"completedAt"`
+	TournamentTitle     string    `json:"tournamentTitle,omitempty"`
 }
 
 // RoundPenalty — применённое усложнение участнику в раунде. Штраф = times × величина

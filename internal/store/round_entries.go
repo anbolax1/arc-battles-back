@@ -61,31 +61,33 @@ func (s *Store) ListRoundEntries(ctx context.Context, roundID string) ([]models.
 	return out, rows.Err()
 }
 
-// PointsBreakdown — разложение очков участника по источникам (единый источник формулы
-// для пересчёта total_points и для статистики профиля).
+// Очки за контракт: свой выполненный контракт даёт ContractOwnPoints, выполненный контракт
+// противника — ContractCrossPoints. Легендарный контракт — LegendaryPoints (если у записи нет
+// собственного points).
+const (
+	ContractOwnPoints   = 2
+	ContractCrossPoints = 1
+)
+
+// PointsBreakdown — разложение очков участника по источникам (единый источник формулы для
+// пересчёта total_points и для статистики профиля). Новая концепция: протоколы НЕ влияют на
+// очки (штраф = минуты в рейде), процентных наград нет.
 type PointsBreakdown struct {
-	Base         int // ручные очки за раунды (round_entries.points)
-	Starter      int // зачтённые стартовые: times × points
-	BonusFixed   int // бонусные fixed
-	BonusPercent int // бонусные percent (от earned)
-	Penalty      int // штрафы (число ≥0; вычитается)
+	Base      int // ручная корректировка раунда (round_entries.points)
+	Main      int // основные задания раунда (per-side): SUM(times × points)
+	Contracts int // контракты: 2 × свои выполненные + 1 × чужие выполненные
+	Legendary int // легендарные контракты: SUM(points) выполненных участником
 }
 
-// Earned — база, на которую начисляются percent-бонусы и штрафы.
-func (b PointsBreakdown) Earned() int { return b.Base + b.Starter + b.BonusFixed }
-
-// Total — итоговые очки участника: earned + percent-бонусы − штрафы.
-func (b PointsBreakdown) Total() int { return b.Earned() + b.BonusPercent - b.Penalty }
+// Total — итоговые очки участника в турнире (определяют победителя раунда).
+func (b PointsBreakdown) Total() int { return b.Base + b.Main + b.Contracts + b.Legendary }
 
 // participantBreakdown считает разложение очков участника (без записи в БД):
 //
-//	earned = SUM(round_entries.points)              -- база (ручные очки за раунды)
-//	       + SUM(rst.times × starter_task.points)    -- зачтённые стартовые задания
-//	       + SUM(выполненных бонусных, fixed)        -- бонусные fixed
-//	bonus%  = SUM(выполненных бонусных, percent → round(pts% × earned))
-//	penalty = SUM(rp.times × величина)               -- fixed: penalty; percent: round(penalty% × earned)
-//
-// Все percent считаются от earned (база + стартовые + fixed-бонусы).
+//	base      = SUM(round_entries.points)                              -- ручная корректировка
+//	main      = SUM(rstd.times × starter_task.points)                  -- основные задания (своя сторона)
+//	contracts = SUM(2 за свой выполненный + 1 за выполненный контракт противника)
+//	legendary = SUM(points выполненных легендарных контрактов)
 func (s *Store) participantBreakdown(ctx context.Context, participantID string) (PointsBreakdown, error) {
 	var b PointsBreakdown
 	if err := s.Pool.QueryRow(ctx,
@@ -93,63 +95,28 @@ func (s *Store) participantBreakdown(ctx context.Context, participantID string) 
 		participantID).Scan(&b.Base); err != nil {
 		return b, err
 	}
+	// Основные задания: per-side зачёт через round_starter_task_done.
 	if err := s.Pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(rst.times * st.points), 0)
-		FROM round_starter_tasks rst
+		SELECT COALESCE(SUM(rstd.times * st.points), 0)
+		FROM round_starter_task_done rstd
+		JOIN round_starter_tasks rst ON rst.id = rstd.round_starter_task_id
 		JOIN starter_tasks st ON st.id = rst.starter_task_id
-		WHERE rst.completed_by = $1`, participantID).Scan(&b.Starter); err != nil {
+		WHERE rstd.participant_id = $1`, participantID).Scan(&b.Main); err != nil {
 		return b, err
 	}
+	// Контракты: свой выполненный = 2, выполненный контракт противника = 1.
 	if err := s.Pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(rbt.times * ct.points), 0)
-		FROM round_bonus_tasks rbt
-		JOIN catalog_tasks ct ON ct.id = rbt.task_id
-		WHERE rbt.participant_id = $1 AND ct.value_type = 'fixed'`, participantID).Scan(&b.BonusFixed); err != nil {
+		SELECT COALESCE(SUM(CASE WHEN participant_id = $1 THEN $2 ELSE $3 END), 0)
+		FROM round_bonus_tasks
+		WHERE completed_by = $1`, participantID, ContractOwnPoints, ContractCrossPoints).Scan(&b.Contracts); err != nil {
 		return b, err
 	}
-	earned := b.Earned()
-
-	// percent-бонусы (зачтённые, times>0)
-	bRows, err := s.Pool.Query(ctx, `
-		SELECT rbt.times, ct.points FROM round_bonus_tasks rbt
-		JOIN catalog_tasks ct ON ct.id = rbt.task_id
-		WHERE rbt.participant_id = $1 AND rbt.times > 0 AND ct.value_type = 'percent'`, participantID)
-	if err != nil {
-		return b, err
-	}
-	for bRows.Next() {
-		var times, pct int
-		if err := bRows.Scan(&times, &pct); err != nil {
-			bRows.Close()
-			return b, err
-		}
-		b.BonusPercent += times * models.EffectiveValue(pct, models.ValuePercent, earned)
-	}
-	bRows.Close()
-	if err := bRows.Err(); err != nil {
-		return b, err
-	}
-
-	// штрафы
-	pRows, err := s.Pool.Query(ctx, `
-		SELECT rp.times, c.penalty, c.value_type
-		FROM round_penalties rp
-		JOIN catalog_complications c ON c.id = rp.complication_id
-		WHERE rp.participant_id = $1 AND rp.times > 0`, participantID)
-	if err != nil {
-		return b, err
-	}
-	for pRows.Next() {
-		var times, value int
-		var valueType string
-		if err := pRows.Scan(&times, &value, &valueType); err != nil {
-			pRows.Close()
-			return b, err
-		}
-		b.Penalty += times * models.EffectiveValue(value, valueType, earned)
-	}
-	pRows.Close()
-	if err := pRows.Err(); err != nil {
+	// Легендарные контракты, выполненные этим участником.
+	if err := s.Pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(lc.points), 0)
+		FROM legendary_contract_completions lcc
+		JOIN legendary_contracts lc ON lc.id = lcc.legendary_contract_id
+		WHERE lcc.participant_id = $1`, participantID).Scan(&b.Legendary); err != nil {
 		return b, err
 	}
 	return b, nil
