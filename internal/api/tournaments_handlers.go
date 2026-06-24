@@ -110,6 +110,9 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if body.Status != nil {
+		// Старый статус — чтобы побочные эффекты (авто-победитель, начисление/откат MMR) срабатывали
+		// ТОЛЬКО при фактическом ПЕРЕХОДЕ статуса, а не на повторном PATCH с тем же значением.
+		oldStatus, _ := s.Store.TournamentStatus(r.Context(), id)
 		// В эфире одновременно только один турнир: при переводе в live остальные live → upcoming.
 		if *body.Status == "live" {
 			if err := s.Store.DemoteLiveExcept(r.Context(), id); err != nil {
@@ -121,14 +124,14 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// Авто-победитель: при «завершён» — сторона с макс. очками (если не задан явно).
-		// При возврате из «завершён» в другой статус — снимаем победителя и откатываем MMR.
-		if *body.Status == "finished" {
+		if *body.Status == "finished" && oldStatus != "finished" {
+			// Переход в «завершён»: авто-победитель (макс. очки, если не задан явно) + начисление MMR.
 			if body.WinnerParticipantID == nil {
 				_ = s.Store.SetWinnerTop(r.Context(), id)
 				_ = s.Store.ApplyTournamentMmr(r.Context(), id)
 			}
-		} else {
+		} else if *body.Status != "finished" && oldStatus == "finished" {
+			// Выход из «завершён»: откат MMR + снятие победителя.
 			_ = s.Store.RevertTournamentMmr(r.Context(), id)
 			_ = s.Store.ClearWinner(r.Context(), id)
 		}
@@ -291,6 +294,14 @@ func (s *Server) handleCreateRound(w http.ResponseWriter, r *http.Request) {
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
+	}
+	// Ровно 1 раунд на турнир: раунд №1 авто-создаётся при создании турнира; дополнительные нельзя.
+	if body.Number > 1 {
+		writeError(w, http.StatusConflict, "на турнир ровно один раунд — создавать дополнительные нельзя")
+		return
+	}
+	if body.Number == 0 {
+		body.Number = 1
 	}
 	round, err := s.Store.CreateRound(r.Context(), models.Round{
 		TournamentID: id,

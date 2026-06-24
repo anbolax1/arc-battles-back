@@ -81,6 +81,7 @@ func (s *Server) handleUpdateRound(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
+	body.Number = nil // номер раунда неизменяем: ровно 1 раунд на турнир
 	round, err := s.Store.UpdateRound(r.Context(), roundID, body.Status, body.Map, body.Number)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "раунд не найден")
@@ -97,18 +98,7 @@ func (s *Server) handleUpdateRound(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, round)
 }
 
-// DELETE /api/rounds/{id} — удалить раунд (и каскадом его результаты/задания/штрафы). Organizer-only.
+// DELETE /api/rounds/{id} — заблокировано: на турнир ровно один раунд (авто-создаётся), удалять нельзя.
 func (s *Server) handleDeleteRound(w http.ResponseWriter, r *http.Request) {
-	roundID := chi.URLParam(r, "id")
-	if st, err := s.Store.StatusByRound(r.Context(), roundID); err == nil && s.blockIfFinished(w, st) {
-		return
-	}
-	if err := s.Store.DeleteRound(r.Context(), roundID); errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "раунд не найден")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	writeError(w, http.StatusConflict, "на турнир ровно один раунд — его нельзя удалить")
 }
