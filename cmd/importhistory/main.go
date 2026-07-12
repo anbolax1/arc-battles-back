@@ -1,15 +1,18 @@
-// Команда importhistory — одноразовый импорт истории турниров «Битва за Респект» из выгрузок
-// Google-таблицы (CSV) в БД: создаёт аккаунты по никам, проигрывает КАЖДУЮ строку истории как
-// матч (1×1 и 2×2) в хронологическом порядке через store.ApplyTournamentMmr (Elo K=32), бэкдейтит
-// время под дату матча — чтобы MMR, статистика и графики были заполнены реальной историей.
+// Команда importhistory — импорт/синхронизация истории турниров «Битва за Респект» из
+// Google-таблицы в БД.
 //
-// Запуск (локально):
+// Режимы:
 //
-//	DATABASE_URL=postgres://respect:respect@localhost:5433/respect \
-//	go run ./cmd/importhistory -csv "<путь к папке с CSV>" -force
+//	-wipe-all         снести ВСЕ турниры сайта и залить только данные таблицы (первичный импорт)
+//	-force            пересобрать только импортированные ([история]) турниры
+//	-sync             синхронизация: обновить [история]-турниры по ext_key (стабильные id),
+//	                  не трогая турниры из админки/эфира; MMR пересчитывается по всем матчам
 //
-// Ожидаемые файлы в -csv: 01_1x1_players.csv, 02_1x1_history.csv, 03_2x2_teams.csv,
-// 04_2x2_ratings.csv, 05_2x2_history.csv.
+// Источник данных: локальные CSV из -csv ЛИБО прямая загрузка листов из Google по -sheet <id>.
+//
+// Пример (cron, каждые 10 минут):
+//
+//	DATABASE_URL=... importhistory -sheet <SHEET_ID> -csv /tmp/arc-sync -sync
 package main
 
 import (
@@ -20,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,14 +33,14 @@ import (
 	"github.com/battle-for-respect/backend/internal/db"
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/battle-for-respect/backend/internal/store"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Алиасы ников → логин аккаунта. Нужны в двух случаях: (1) в истории ник записан иначе, чем в
-// ростере; (2) игрок УЖЕ зарегистрирован реальным аккаунтом под другим логином — тогда историю
-// вешаем на реальный аккаунт, а не на заглушку.
+// Алиасы ников → логин аккаунта: (1) в истории ник записан иначе, чем в ростере; (2) игрок уже
+// зарегистрирован реальным аккаунтом под другим логином — историю вешаем на реальный аккаунт.
 var aliases = map[string]string{
-	"QWERTY":  "QWERTY345", // сокращённая форма в истории
-	"1STW00D": "Istwood",   // реальный аккаунт на проде
+	"QWERTY":  "QWERTY345",
+	"1STW00D": "Istwood",
 }
 
 func resolveNick(n string) string {
@@ -47,10 +51,39 @@ func resolveNick(n string) string {
 	return n
 }
 
+// gids вкладок, нужных для импорта.
+var gids = map[string]string{
+	"02_1x1_history.csv": "364075199",
+	"03_2x2_teams.csv":   "2142761644",
+	"05_2x2_history.csv": "842608179",
+}
+
+// Side — сторона матча (игрок в 1×1 или команда в 2×2).
+type Side struct {
+	Name    string   // отображаемое имя (ник или название команды)
+	UserID  string   // 1×1
+	Members []string // 2×2 — userId состава
+	IsTeam  bool
+}
+
+// Match — один матч из таблицы с детерминированным внешним ключом.
+type Match struct {
+	ExtKey string
+	Mode   string // 1x1 | 2x2
+	Date   time.Time
+	Title  string
+	Map    string
+	Draw   bool
+	A, B   Side
+	WinA   bool // победила сторона A (если !Draw)
+}
+
 func main() {
-	csvDir := flag.String("csv", ".", "папка с CSV-выгрузками вкладок")
-	force := flag.Bool("force", false, "сбросить прежний импорт ([история]) и MMR перед импортом")
-	wipeAll := flag.Bool("wipe-all", false, "снести ВСЕ турниры/статистику сайта, оставить только импорт (для прода)")
+	csvDir := flag.String("csv", ".", "папка с CSV (или куда скачивать при -sheet)")
+	sheet := flag.String("sheet", "", "ID Google-таблицы — скачать листы напрямую")
+	doSync := flag.Bool("sync", false, "синхронизация: обновить [история] по ext_key, MMR пересчитать по всем")
+	force := flag.Bool("force", false, "пересобрать только [история]")
+	wipeAll := flag.Bool("wipe-all", false, "снести ВСЕ турниры сайта, оставить только импорт")
 	flag.Parse()
 
 	url := os.Getenv("DATABASE_URL")
@@ -59,6 +92,14 @@ func main() {
 	}
 	if url == "" {
 		log.Fatal("не задан DATABASE_URL")
+	}
+
+	// Загрузку делаем ДО подключения к БД — сбой сети не должен трогать данные.
+	if *sheet != "" {
+		if err := fetchSheet(*sheet, *csvDir); err != nil {
+			log.Fatalf("загрузка таблицы: %v", err)
+		}
+		log.Println("листы таблицы загружены в", *csvDir)
 	}
 
 	if err := db.Migrate(url); err != nil {
@@ -72,35 +113,15 @@ func main() {
 	defer pool.Close()
 	st := store.New(pool)
 
-	// Защита: не затирать реальные (не импортированные) матчи.
-	var histCount int
-	_ = pool.QueryRow(ctx, `SELECT
-		(SELECT COUNT(*) FROM mmr_history) + (SELECT COUNT(*) FROM team_mmr_history)`).Scan(&histCount)
-	if histCount > 0 && !*force && !*wipeAll {
-		log.Fatalf("в БД уже есть %d записей MMR-истории — запустите с -force (сброс импорта) или -wipe-all (снести всё)", histCount)
-	}
-	if *wipeAll {
-		// Снести ВСЮ старую статистику сайта: все турниры (каскадом — участники, раунды,
-		// результаты, mmr_history/team_mmr_history) + кэши MMR. Пользователи/сезоны/каталог остаются.
-		if _, err := pool.Exec(ctx, `DELETE FROM tournaments`); err != nil {
-			log.Fatalf("wipe-all турниров: %v", err)
-		}
-		log.Println("ВСЕ турниры и статистика сайта удалены (-wipe-all)")
-	} else if *force {
-		if _, err := pool.Exec(ctx, `DELETE FROM tournaments WHERE title LIKE '[история]%'`); err != nil {
-			log.Fatalf("сброс импорта: %v", err)
-		}
-		log.Println("прежний импорт ([история]) удалён (-force)")
-	}
-	if *force || *wipeAll {
-		for _, q := range []string{`TRUNCATE mmr_history`, `TRUNCATE team_mmr_history`, `DELETE FROM user_mmr`, `DELETE FROM team_mmr`} {
-			if _, err := pool.Exec(ctx, q); err != nil {
-				log.Fatalf("сброс MMR (%s): %v", q, err)
-			}
+	if !*doSync && !*force && !*wipeAll {
+		var hist int
+		_ = pool.QueryRow(ctx, `SELECT (SELECT COUNT(*) FROM mmr_history)+(SELECT COUNT(*) FROM team_mmr_history)`).Scan(&hist)
+		if hist > 0 {
+			log.Fatalf("в БД есть данные MMR — укажите режим: -sync (штатный), -force или -wipe-all")
 		}
 	}
 
-	userCache := map[string]string{} // login -> userID
+	userCache := map[string]string{}
 	ensureUser := func(nick string) (string, error) {
 		login := resolveNick(nick)
 		if login == "" {
@@ -114,10 +135,8 @@ func main() {
 			userCache[key] = u.ID
 			return u.ID, nil
 		}
-		// Плейсхолдер-аккаунт: пароль-хеш заведомо невалиден (войти нельзя), роль — обычная.
 		u, err := st.CreateUser(ctx, login, login, "!imported", models.Role("user"))
 		if err != nil {
-			// возможна гонка/уже существует — попробуем прочитать
 			if u2, e2 := st.GetUserByLogin(ctx, login); e2 == nil {
 				userCache[key] = u2.ID
 				return u2.ID, nil
@@ -128,88 +147,204 @@ func main() {
 		return u.ID, nil
 	}
 
-	backdate := func(tid string, at time.Time) {
-		_, _ = pool.Exec(ctx, `UPDATE mmr_history SET created_at=$2 WHERE tournament_id=$1`, tid, at)
-		_, _ = pool.Exec(ctx, `UPDATE team_mmr_history SET created_at=$2 WHERE tournament_id=$1`, tid, at)
-	}
-	// Историческая партия сыграна → раунд завершён (иначе на стр. турнира «раунд: ожидание»).
-	finishRounds := func(tid string) {
-		_, _ = pool.Exec(ctx, `UPDATE rounds SET status='finished' WHERE tournament_id=$1`, tid)
+	matches, skipped := buildMatches(*csvDir, ensureUser)
+
+	// Режим reset: wipe-all сносит все турниры, force — только [история].
+	if *wipeAll {
+		if _, err := pool.Exec(ctx, `DELETE FROM tournaments`); err != nil {
+			log.Fatalf("wipe-all: %v", err)
+		}
+		log.Println("ВСЕ турниры сайта удалены (-wipe-all)")
+	} else if *force {
+		if _, err := pool.Exec(ctx, `DELETE FROM tournaments WHERE title LIKE '[история]%'`); err != nil {
+			log.Fatalf("force reset: %v", err)
+		}
 	}
 
-	// ---------------- 1×1 ----------------
-	rows1 := readCSV(filepath.Join(*csvDir, "02_1x1_history.csv"))
+	// Upsert каждого матча (стабильный id по ext_key).
+	keys := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if err := upsertMatch(ctx, pool, st, m); err != nil {
+			log.Fatalf("upsert %s: %v", m.ExtKey, err)
+		}
+		keys = append(keys, m.ExtKey)
+	}
+
+	// Удаляем импортированные турниры, которых больше нет в таблице (актуально для -sync).
+	// Страховка: при пустом наборе (напр. сбой/пустая выгрузка) НЕ трогаем существующие.
+	if len(keys) > 0 {
+		if _, err := pool.Exec(ctx,
+			`DELETE FROM tournaments WHERE title LIKE '[история]%' AND ext_key <> ALL($1)`, keys); err != nil {
+			log.Fatalf("удаление устаревших: %v", err)
+		}
+	} else {
+		log.Println("ВНИМАНИЕ: 0 матчей из таблицы — устаревшие НЕ удаляю (страховка)")
+	}
+
+	// Полный пересчёт MMR по всем завершённым турнирам (импорт + админские).
+	if err := st.RecomputeAllMmr(ctx); err != nil {
+		log.Fatalf("пересчёт MMR: %v", err)
+	}
+
+	// Бэкдейт истории MMR под дату матча (для графика/ленты).
+	for _, q := range []string{
+		`UPDATE mmr_history h SET created_at=t.starts_at FROM tournaments t WHERE t.id=h.tournament_id AND t.starts_at IS NOT NULL`,
+		`UPDATE team_mmr_history h SET created_at=t.starts_at FROM tournaments t WHERE t.id=h.tournament_id AND t.starts_at IS NOT NULL`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			log.Fatalf("бэкдейт: %v", err)
+		}
+	}
+
+	// Чистка заглушек-сирот (аккаунты импорта, ни на что не завязанные, — напр. мэпнутые на реальные).
+	if _, err := pool.Exec(ctx, `
+		DELETE FROM users u WHERE u.password_hash='!imported'
+		  AND NOT EXISTS (SELECT 1 FROM team_mmr t WHERE t.member_a=u.id OR t.member_b=u.id)
+		  AND NOT EXISTS (SELECT 1 FROM participants p WHERE p.user_id=u.id)
+		  AND NOT EXISTS (SELECT 1 FROM participants p WHERE p.members @> jsonb_build_array(jsonb_build_object('userId', u.id)))`); err != nil {
+		log.Fatalf("чистка сирот: %v", err)
+	}
+
+	mode := "import"
+	if *doSync {
+		mode = "sync"
+	}
+	log.Printf("ГОТОВО (%s): матчей=%d (пропущено 2×2=%d), аккаунтов=%d", mode, len(matches), skipped, len(userCache))
+}
+
+// upsertMatch создаёт или обновляет [история]-турнир по ext_key (id стабилен), заменяя состав и раунд.
+func upsertMatch(ctx context.Context, pool *pgxpool.Pool, st *store.Store, m Match) error {
+	mapsJSON := "[]"
+	if m.Map != "" {
+		b, _ := json.Marshal([]string{m.Map})
+		mapsJSON = string(b)
+	}
+	var tid string
+	err := pool.QueryRow(ctx, `SELECT id FROM tournaments WHERE ext_key=$1`, m.ExtKey).Scan(&tid)
+	if err != nil {
+		// нет — создаём
+		if err := pool.QueryRow(ctx, `
+			INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, ext_key, season_id)
+			VALUES ($1,$2,'pvpve','finished',1,$3,$4,1,$5,(SELECT id FROM seasons WHERE status='active' LIMIT 1))
+			RETURNING id`, m.Title, m.Mode, mapsJSON, m.Date, m.ExtKey).Scan(&tid); err != nil {
+			return err
+		}
+	} else {
+		if _, err := pool.Exec(ctx, `
+			UPDATE tournaments SET title=$2, mode=$3, maps=$4, starts_at=$5, status='finished', updated_at=now()
+			WHERE id=$1`, tid, m.Title, m.Mode, mapsJSON, m.Date); err != nil {
+			return err
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM participants WHERE tournament_id=$1`, tid); err != nil {
+			return err
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM rounds WHERE tournament_id=$1`, tid); err != nil {
+			return err
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO rounds (tournament_id, number, map, status) VALUES ($1,1,$2,'finished')`, tid, m.Map); err != nil {
+		return err
+	}
+
+	mkPart := func(s Side, seed int) (string, error) {
+		p := models.Participant{TournamentID: tid, Name: s.Name, Seed: seed}
+		if s.IsTeam {
+			p.Kind = "team"
+			arr := []map[string]string{}
+			for _, id := range s.Members {
+				arr = append(arr, map[string]string{"userId": id, "name": id})
+			}
+			b, _ := json.Marshal(arr)
+			p.Members = b
+		} else {
+			p.Kind = "player"
+			uid := s.UserID
+			p.UserID = &uid
+		}
+		created, err := st.AddParticipant(ctx, p)
+		return created.ID, err
+	}
+	paID, err := mkPart(m.A, 1)
+	if err != nil {
+		return err
+	}
+	pbID, err := mkPart(m.B, 2)
+	if err != nil {
+		return err
+	}
+	if !m.Draw {
+		winner := paID
+		if !m.WinA {
+			winner = pbID
+		}
+		if _, err := pool.Exec(ctx, `UPDATE tournaments SET winner_participant_id=$2 WHERE id=$1`, tid, winner); err != nil {
+			return err
+		}
+	} else {
+		if _, err := pool.Exec(ctx, `UPDATE tournaments SET winner_participant_id=NULL WHERE id=$1`, tid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildMatches парсит CSV в список матчей (создавая аккаунты). skipped — сколько 2×2 пропущено
+// (не нашёлся состав команды).
+func buildMatches(csvDir string, ensureUser func(string) (string, error)) ([]Match, int) {
+	var out []Match
+	occ := map[string]int{}
+	extKey := func(mode, date, a, b string) string {
+		base := mode + "|" + date + "|" + strings.ToUpper(strings.TrimSpace(a)) + "|" + strings.ToUpper(strings.TrimSpace(b))
+		k := base + "|" + strconv.Itoa(occ[base])
+		occ[base]++
+		return k
+	}
+	// starts_at = дата матча + посекундный сдвиг по глобальному порядку строк, чтобы порядок
+	// MMR-пересчёта был точным и стабильным (не зависел от created_at, который после upsert путается).
 	seq := 0
-	imported1, draws := 0, 0
+	nextDate := func(s string) time.Time {
+		d := parseDate(s).Add(time.Duration(seq) * time.Second)
+		seq++
+		return d
+	}
+
+	// 1×1
+	rows1 := readCSV(filepath.Join(csvDir, "02_1x1_history.csv"))
 	for _, r := range rows1[1:] {
 		if len(r) < 7 || strings.TrimSpace(r[4]) == "" || strings.TrimSpace(r[5]) == "" {
 			continue
 		}
-		aNick, bNick, win := strings.TrimSpace(r[4]), strings.TrimSpace(r[5]), strings.TrimSpace(r[6])
+		a, b, win := strings.TrimSpace(r[4]), strings.TrimSpace(r[5]), strings.TrimSpace(r[6])
 		mp := ""
 		if len(r) > 7 {
 			mp = strings.TrimSpace(r[7])
 		}
-		at := parseDate(r[2]).Add(time.Duration(seq) * time.Second)
-		seq++
-		aID, err := ensureUser(aNick)
+		aID, err := ensureUser(a)
 		if err != nil {
-			log.Fatalf("user %s: %v", aNick, err)
+			log.Fatalf("user %s: %v", a, err)
 		}
-		bID, err := ensureUser(bNick)
+		bID, err := ensureUser(b)
 		if err != nil {
-			log.Fatalf("user %s: %v", bNick, err)
+			log.Fatalf("user %s: %v", b, err)
 		}
-		t, err := st.CreateTournament(ctx, models.Tournament{
-			Title: "[история] " + aNick + " vs " + bNick, Mode: "1x1", Maps: mapsOf(mp), StartsAt: &at,
+		out = append(out, Match{
+			ExtKey: extKey("1x1", strings.TrimSpace(r[2]), a, b),
+			Mode:   "1x1", Date: nextDate(r[2]), Title: "[история] " + a + " vs " + b, Map: mp,
+			Draw: win == "", WinA: sameNick(win, a),
+			A: Side{Name: a, UserID: aID}, B: Side{Name: b, UserID: bID},
 		})
-		if err != nil {
-			log.Fatalf("турнир 1×1: %v", err)
-		}
-		pa, err := st.AddParticipant(ctx, models.Participant{TournamentID: t.ID, Kind: "player", UserID: &aID, Name: aNick, Seed: 1})
-		if err != nil {
-			log.Fatalf("участник A: %v", err)
-		}
-		pb, err := st.AddParticipant(ctx, models.Participant{TournamentID: t.ID, Kind: "player", UserID: &bID, Name: bNick, Seed: 2})
-		if err != nil {
-			log.Fatalf("участник B: %v", err)
-		}
-		finishRounds(t.ID)
-		if win == "" {
-			// Ничья: матч есть, MMR никому.
-			if _, err := st.UpdateTournamentStatus(ctx, t.ID, "finished"); err != nil {
-				log.Fatalf("статус ничьи: %v", err)
-			}
-			draws++
-			continue
-		}
-		winnerID := pa.ID
-		if !sameNick(win, aNick) {
-			winnerID = pb.ID
-		}
-		if _, err := st.SetTournamentWinner(ctx, t.ID, winnerID); err != nil {
-			log.Fatalf("победитель 1×1: %v", err)
-		}
-		if err := st.ApplyTournamentMmr(ctx, t.ID); err != nil {
-			log.Fatalf("MMR 1×1: %v", err)
-		}
-		backdate(t.ID, at)
-		imported1++
 	}
 
-	// ---------------- 2×2 ----------------
-	teamMembers := map[string][2]string{} // upper(teamName) -> [nickA, nickB]
-	for _, r := range readCSV(filepath.Join(*csvDir, "03_2x2_teams.csv"))[1:] {
+	// 2×2 составы
+	teamMembers := map[string][2]string{}
+	for _, r := range readCSV(filepath.Join(csvDir, "03_2x2_teams.csv"))[1:] {
 		if len(r) < 5 || strings.TrimSpace(r[2]) == "" {
 			continue
 		}
 		teamMembers[strings.ToUpper(strings.TrimSpace(r[2]))] = [2]string{strings.TrimSpace(r[3]), strings.TrimSpace(r[4])}
 	}
-
-	rows2 := readCSV(filepath.Join(*csvDir, "05_2x2_history.csv"))
-	seq2 := 0
-	imported2, skipped2 := 0, 0
-	for _, r := range rows2[1:] {
+	skipped := 0
+	for _, r := range readCSV(filepath.Join(csvDir, "05_2x2_history.csv"))[1:] {
 		if len(r) < 7 || strings.TrimSpace(r[4]) == "" || strings.TrimSpace(r[5]) == "" {
 			continue
 		}
@@ -221,83 +356,65 @@ func main() {
 		ma, okA := teamMembers[strings.ToUpper(nameA)]
 		mb, okB := teamMembers[strings.ToUpper(nameB)]
 		if !okA || !okB {
-			log.Printf("2×2: пропуск матча — не нашёл состав команды %q/%q", nameA, nameB)
-			skipped2++
+			log.Printf("2×2: пропуск — нет состава %q/%q", nameA, nameB)
+			skipped++
 			continue
 		}
-		membersA, err := membersJSON(ensureUser, ma)
-		if err != nil {
-			log.Fatalf("состав %s: %v", nameA, err)
-		}
-		membersB, err := membersJSON(ensureUser, mb)
-		if err != nil {
-			log.Fatalf("состав %s: %v", nameB, err)
-		}
-		at := parseDate(r[2]).Add(time.Duration(seq2) * time.Second)
-		seq2++
-		t, err := st.CreateTournament(ctx, models.Tournament{
-			Title: "[история] " + nameA + " vs " + nameB, Mode: "2x2", Maps: mapsOf(mp), StartsAt: &at,
-		})
-		if err != nil {
-			log.Fatalf("турнир 2×2: %v", err)
-		}
-		pa, err := st.AddParticipant(ctx, models.Participant{TournamentID: t.ID, Kind: "team", Name: nameA, Seed: 1, Members: membersA})
-		if err != nil {
-			log.Fatalf("команда A: %v", err)
-		}
-		pb, err := st.AddParticipant(ctx, models.Participant{TournamentID: t.ID, Kind: "team", Name: nameB, Seed: 2, Members: membersB})
-		if err != nil {
-			log.Fatalf("команда B: %v", err)
-		}
-		finishRounds(t.ID)
-		if win == "" {
-			if _, err := st.UpdateTournamentStatus(ctx, t.ID, "finished"); err != nil {
-				log.Fatalf("статус ничьи 2×2: %v", err)
+		membersOf := func(nn [2]string) []string {
+			var ids []string
+			for _, nk := range nn {
+				if strings.TrimSpace(nk) == "" {
+					continue
+				}
+				id, err := ensureUser(nk)
+				if err != nil {
+					log.Fatalf("состав %s: %v", nk, err)
+				}
+				ids = append(ids, id)
 			}
-			continue
+			return ids
 		}
-		winnerID := pa.ID
-		if !sameNick(win, nameA) {
-			winnerID = pb.ID
-		}
-		if _, err := st.SetTournamentWinner(ctx, t.ID, winnerID); err != nil {
-			log.Fatalf("победитель 2×2: %v", err)
-		}
-		if err := st.ApplyTournamentMmr(ctx, t.ID); err != nil {
-			log.Fatalf("MMR 2×2: %v", err)
-		}
-		backdate(t.ID, at)
-		imported2++
+		out = append(out, Match{
+			ExtKey: extKey("2x2", strings.TrimSpace(r[2]), nameA, nameB),
+			Mode:   "2x2", Date: nextDate(r[2]), Title: "[история] " + nameA + " vs " + nameB, Map: mp,
+			Draw: win == "", WinA: sameNick(win, nameA),
+			A: Side{Name: nameA, IsTeam: true, Members: membersOf(ma)},
+			B: Side{Name: nameB, IsTeam: true, Members: membersOf(mb)},
+		})
 	}
-
-	log.Printf("ГОТОВО: 1×1 матчей=%d (ничьих=%d), 2×2 матчей=%d (пропущено=%d), аккаунтов=%d",
-		imported1, draws, imported2, skipped2, len(userCache))
+	return out, skipped
 }
 
-func membersJSON(ensure func(string) (string, error), nicks [2]string) (json.RawMessage, error) {
-	arr := []map[string]string{}
-	for _, n := range nicks {
-		if strings.TrimSpace(n) == "" {
-			continue
-		}
-		id, err := ensure(n)
-		if err != nil {
-			return nil, err
-		}
-		arr = append(arr, map[string]string{"userId": id, "name": strings.TrimSpace(n)})
+func fetchSheet(id, dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
-	return json.Marshal(arr)
+	client := &http.Client{Timeout: 30 * time.Second}
+	for name, gid := range gids {
+		url := fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/gviz/tq?tqx=out:csv&gid=%s", id, gid)
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("%s: HTTP %d", name, resp.StatusCode)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sameNick(a, b string) bool {
 	return strings.EqualFold(strings.TrimSpace(resolveNick(a)), strings.TrimSpace(resolveNick(b)))
-}
-
-func mapsOf(m string) []string {
-	if strings.TrimSpace(m) == "" {
-		return []string{}
-	}
-	return []string{strings.TrimSpace(m)}
 }
 
 func parseDate(s string) time.Time {

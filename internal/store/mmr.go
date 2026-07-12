@@ -352,3 +352,37 @@ func (s *Store) PopulateTournamentMmrChanges(ctx context.Context, t *models.Tour
 		}
 	}
 }
+
+// RecomputeAllMmr полностью пересчитывает MMR (игроков и команд) с нуля по ВСЕМ завершённым
+// турнирам в хронологическом порядке — для синка, где меняется состав завершённых матчей.
+func (s *Store) RecomputeAllMmr(ctx context.Context) error {
+	for _, q := range []string{`TRUNCATE mmr_history`, `TRUNCATE team_mmr_history`, `DELETE FROM user_mmr`, `DELETE FROM team_mmr`} {
+		if _, err := s.Pool.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+	rows, err := s.Pool.Query(ctx,
+		`SELECT id FROM tournaments WHERE status='finished' ORDER BY COALESCE(starts_at, created_at), created_at`)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := s.ApplyTournamentMmr(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
