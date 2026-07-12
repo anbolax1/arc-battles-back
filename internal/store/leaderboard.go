@@ -50,7 +50,7 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 // Показываются только команды, сыгравшие хотя бы один завершённый матч (в сезоне, если задан).
 func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.TeamLeaderboardRow, error) {
 	const q = `
-		SELECT tm.team_key, tm.mmr,
+		SELECT tm.team_key, tm.name, tm.mmr,
 		       COALESCE(SUM(CASE WHEN h.delta > 0 THEN t.rating_multiplier ELSE 0 END), 0)::int AS wins,
 		       COALESCE(SUM(CASE WHEN h.delta < 0 THEN t.rating_multiplier ELSE 0 END), 0)::int AS losses,
 		       ua.id, ua.login, ua.display_name, ua.avatar_url,
@@ -61,7 +61,7 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 		   AND ($1 = '' OR t.season_id = $1)
 		JOIN users ua ON ua.id = tm.member_a
 		JOIN users ub ON ub.id = tm.member_b
-		GROUP BY tm.team_key, tm.mmr, ua.id, ua.login, ua.display_name, ua.avatar_url,
+		GROUP BY tm.team_key, tm.name, tm.mmr, ua.id, ua.login, ua.display_name, ua.avatar_url,
 		         ub.id, ub.login, ub.display_name, ub.avatar_url
 		ORDER BY tm.mmr DESC, wins DESC`
 
@@ -75,7 +75,7 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 	for rows.Next() {
 		var r models.TeamLeaderboardRow
 		var a, b models.TeamMember
-		if err := rows.Scan(&r.TeamKey, &r.Mmr, &r.Wins, &r.Losses,
+		if err := rows.Scan(&r.TeamKey, &r.Name, &r.Mmr, &r.Wins, &r.Losses,
 			&a.UserID, &a.Login, &a.DisplayName, &a.AvatarURL,
 			&b.UserID, &b.Login, &b.DisplayName, &b.AvatarURL); err != nil {
 			return nil, err

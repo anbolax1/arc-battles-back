@@ -31,8 +31,13 @@ import (
 	"github.com/battle-for-respect/backend/internal/store"
 )
 
-// Алиасы ников: в истории матчей встречается сокращённая форма, в ростере — полная.
-var aliases = map[string]string{"QWERTY": "QWERTY345"}
+// Алиасы ников → логин аккаунта. Нужны в двух случаях: (1) в истории ник записан иначе, чем в
+// ростере; (2) игрок УЖЕ зарегистрирован реальным аккаунтом под другим логином — тогда историю
+// вешаем на реальный аккаунт, а не на заглушку.
+var aliases = map[string]string{
+	"QWERTY":  "QWERTY345", // сокращённая форма в истории
+	"1STW00D": "Istwood",   // реальный аккаунт на проде
+}
 
 func resolveNick(n string) string {
 	n = strings.TrimSpace(n)
@@ -127,6 +132,10 @@ func main() {
 		_, _ = pool.Exec(ctx, `UPDATE mmr_history SET created_at=$2 WHERE tournament_id=$1`, tid, at)
 		_, _ = pool.Exec(ctx, `UPDATE team_mmr_history SET created_at=$2 WHERE tournament_id=$1`, tid, at)
 	}
+	// Историческая партия сыграна → раунд завершён (иначе на стр. турнира «раунд: ожидание»).
+	finishRounds := func(tid string) {
+		_, _ = pool.Exec(ctx, `UPDATE rounds SET status='finished' WHERE tournament_id=$1`, tid)
+	}
 
 	// ---------------- 1×1 ----------------
 	rows1 := readCSV(filepath.Join(*csvDir, "02_1x1_history.csv"))
@@ -165,6 +174,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("участник B: %v", err)
 		}
+		finishRounds(t.ID)
 		if win == "" {
 			// Ничья: матч есть, MMR никому.
 			if _, err := st.UpdateTournamentStatus(ctx, t.ID, "finished"); err != nil {
@@ -239,6 +249,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("команда B: %v", err)
 		}
+		finishRounds(t.ID)
 		if win == "" {
 			if _, err := st.UpdateTournamentStatus(ctx, t.ID, "finished"); err != nil {
 				log.Fatalf("статус ничьи 2×2: %v", err)

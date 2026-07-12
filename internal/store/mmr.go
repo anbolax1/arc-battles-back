@@ -122,11 +122,12 @@ func (s *Store) recomputeUserMmr(ctx context.Context, userID, mode string) error
 
 // ensureTeam гарантирует наличие строки команды в team_mmr (со стартовым 1000) и возвращает её
 // текущий MMR. Ключ и состав — из teamKeyFromParticipant.
-func (s *Store) ensureTeam(ctx context.Context, key, memberA, memberB string) (int, error) {
+func (s *Store) ensureTeam(ctx context.Context, key, memberA, memberB, name string) (int, error) {
 	if _, err := s.Pool.Exec(ctx, `
-		INSERT INTO team_mmr (team_key, member_a, member_b, mmr)
-		VALUES ($1,$2,$3,$4) ON CONFLICT (team_key) DO NOTHING`,
-		key, memberA, memberB, StartMmr); err != nil {
+		INSERT INTO team_mmr (team_key, member_a, member_b, mmr, name)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (team_key) DO UPDATE SET name = EXCLUDED.name WHERE EXCLUDED.name <> ''`,
+		key, memberA, memberB, StartMmr, name); err != nil {
 		return StartMmr, err
 	}
 	var mmr int
@@ -231,11 +232,11 @@ func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner,
 	if !ok1 || !ok2 || wk == lk {
 		return nil
 	}
-	rw, err := s.ensureTeam(ctx, wk, wa, wb)
+	rw, err := s.ensureTeam(ctx, wk, wa, wb, winner.Name)
 	if err != nil {
 		return err
 	}
-	rl, err := s.ensureTeam(ctx, lk, la, lb)
+	rl, err := s.ensureTeam(ctx, lk, la, lb, loser.Name)
 	if err != nil {
 		return err
 	}
@@ -319,4 +320,35 @@ func (s *Store) RevertTournamentMmr(ctx context.Context, tournamentID string) er
 		}
 	}
 	return nil
+}
+
+// PopulateTournamentMmrChanges заполняет t.MmrChanges — изменение MMR каждой стороны за ЭТОТ матч
+// (из mmr_history для 1×1, из team_mmr_history для 2×2). Пусто, если матч ещё не начислен.
+func (s *Store) PopulateTournamentMmrChanges(ctx context.Context, t *models.Tournament) {
+	t.MmrChanges = []models.ParticipantMmr{}
+	for _, p := range t.Participants {
+		var before, after, delta int
+		var err error
+		if t.Mode == "2x2" {
+			key, _, _, ok := teamKeyFromParticipant(p)
+			if !ok {
+				continue
+			}
+			err = s.Pool.QueryRow(ctx,
+				`SELECT mmr_before, mmr_after, delta FROM team_mmr_history WHERE tournament_id=$1 AND team_key=$2`,
+				t.ID, key).Scan(&before, &after, &delta)
+		} else {
+			if p.UserID == nil {
+				continue
+			}
+			err = s.Pool.QueryRow(ctx,
+				`SELECT mmr_before, mmr_after, delta FROM mmr_history WHERE tournament_id=$1 AND user_id=$2 AND mode='1x1'`,
+				t.ID, *p.UserID).Scan(&before, &after, &delta)
+		}
+		if err == nil {
+			t.MmrChanges = append(t.MmrChanges, models.ParticipantMmr{
+				ParticipantID: p.ID, Before: before, After: after, Delta: delta,
+			})
+		}
+	}
 }

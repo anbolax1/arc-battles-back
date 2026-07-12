@@ -55,22 +55,31 @@ type Season struct {
 }
 
 type Tournament struct {
-	ID                  string        `json:"id"`
-	Title               string        `json:"title"`
-	Mode                string        `json:"mode"`
-	PlayerType          string        `json:"playerType"` // pve | pvp | pvpve — тип игроков (пул основных заданий/контрактов)
-	Status              string        `json:"status"`
-	TotalRounds         int           `json:"totalRounds"`
-	RatingMultiplier    int           `json:"ratingMultiplier"` // жетон «×2 рейтинга»: 1 — обычный матч, 2 — считается за два (двойное Elo с компаундингом, W/L +2)
-	Maps                []string      `json:"maps"`
-	StartsAt            *time.Time    `json:"startsAt,omitempty"`
-	WinnerParticipantID *string       `json:"winnerParticipantId,omitempty"`
-	CreatedAt           time.Time     `json:"createdAt"`
-	UpdatedAt           time.Time     `json:"updatedAt"`
-	ParticipantCount    int           `json:"participantCount"` // в списках (без полного participants[])
-	HasSpace            bool          `json:"hasSpace"`         // есть ли свободные слоты (1×1: <2 игроков; 2×2: <2 команд или неполная команда)
-	Participants        []Participant `json:"participants,omitempty"`
-	Rounds              []Round       `json:"rounds,omitempty"`
+	ID                  string           `json:"id"`
+	Title               string           `json:"title"`
+	Mode                string           `json:"mode"`
+	PlayerType          string           `json:"playerType"` // pve | pvp | pvpve — тип игроков (пул основных заданий/контрактов)
+	Status              string           `json:"status"`
+	TotalRounds         int              `json:"totalRounds"`
+	RatingMultiplier    int              `json:"ratingMultiplier"` // жетон «×2 рейтинга»: 1 — обычный матч, 2 — считается за два (двойное Elo с компаундингом, W/L +2)
+	Maps                []string         `json:"maps"`
+	StartsAt            *time.Time       `json:"startsAt,omitempty"`
+	WinnerParticipantID *string          `json:"winnerParticipantId,omitempty"`
+	CreatedAt           time.Time        `json:"createdAt"`
+	UpdatedAt           time.Time        `json:"updatedAt"`
+	ParticipantCount    int              `json:"participantCount"` // в списках (без полного participants[])
+	HasSpace            bool             `json:"hasSpace"`         // есть ли свободные слоты (1×1: <2 игроков; 2×2: <2 команд или неполная команда)
+	Participants        []Participant    `json:"participants,omitempty"`
+	Rounds              []Round          `json:"rounds,omitempty"`
+	MmrChanges          []ParticipantMmr `json:"mmrChanges,omitempty"` // изменение MMR сторон за этот матч (для завершённых)
+}
+
+// ParticipantMmr — изменение MMR стороны за конкретный матч (стр. турнира).
+type ParticipantMmr struct {
+	ParticipantID string `json:"participantId"`
+	Before        int    `json:"before"`
+	After         int    `json:"after"`
+	Delta         int    `json:"delta"`
 }
 
 type Participant struct {
@@ -143,6 +152,7 @@ type TeamMember struct {
 // Ключ команды — неупорядоченная пара userId; wins/losses/games учитывают жетон ×2 (матч = 2).
 type TeamLeaderboardRow struct {
 	TeamKey string       `json:"teamKey"`
+	Name    string       `json:"name"`
 	Mmr     int          `json:"mmr"`
 	Wins    int          `json:"wins"`
 	Losses  int          `json:"losses"`
@@ -202,6 +212,7 @@ type OpponentStat struct {
 // TeamSummary — краткая карточка команды игрока (для списка команд в профиле).
 type TeamSummary struct {
 	TeamKey string       `json:"teamKey"`
+	Name    string       `json:"name"`
 	Members []TeamMember `json:"members"`
 	Mmr     int          `json:"mmr"`
 	Wins    int          `json:"wins"`
@@ -213,6 +224,7 @@ type TeamSummary struct {
 // TeamProfile — публичная страница команды 2×2 (GET /api/teams/{teamKey}).
 type TeamProfile struct {
 	TeamKey   string         `json:"teamKey"`
+	Name      string         `json:"name"`
 	Members   []TeamMember   `json:"members"`
 	Stats     MmrStats       `json:"stats"`
 	Timeline  []MmrPoint     `json:"timeline"`

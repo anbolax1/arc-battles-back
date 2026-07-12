@@ -208,6 +208,7 @@ func (s *Store) GetTournament(ctx context.Context, id string) (models.Tournament
 	if t.Rounds, err = s.ListRounds(ctx, id); err != nil {
 		return t, err
 	}
+	s.PopulateTournamentMmrChanges(ctx, &t)
 	return t, nil
 }
 
