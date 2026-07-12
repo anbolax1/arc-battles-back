@@ -244,6 +244,7 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 	}
 	query := `
 		SELECT u.id, u.login, u.display_name, u.avatar_url, u.email, u.role, u.embark_id, u.created_at,
+		       (u.password_hash LIKE '!%') AS is_placeholder,
 		       COALESCE(s.tournaments, 0), COALESCE(s.wins, 0), COALESCE(s.points, 0), COALESCE(s.participations, 0),
 		       COUNT(*) OVER() AS total
 		FROM users u
@@ -277,7 +278,7 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 		var o models.UserOverview
 		var role string
 		if err := rows.Scan(&o.User.ID, &o.User.Login, &o.User.DisplayName, &o.User.AvatarURL,
-			&o.User.Email, &role, &o.User.EmbarkID, &o.User.CreatedAt,
+			&o.User.Email, &role, &o.User.EmbarkID, &o.User.CreatedAt, &o.IsPlaceholder,
 			&o.Tournaments, &o.Wins, &o.Points, &o.Participations, &total); err != nil {
 			return nil, 0, err
 		}

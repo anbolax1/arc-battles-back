@@ -316,6 +316,7 @@ type UserOverview struct {
 	Wins           int    `json:"wins"`           // побед в завершённых
 	Points         int    `json:"points"`         // суммарные очки в завершённых
 	Participations int    `json:"participations"` // всего участий (включая текущие/анонсы)
+	IsPlaceholder  bool   `json:"isPlaceholder"`  // импортный аккаунт-заглушка (вход невозможен, можно выдать доступ по ссылке)
 }
 
 // Тип числового значения задания/усложнения.
