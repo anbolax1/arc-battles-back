@@ -61,6 +61,7 @@ type Tournament struct {
 	PlayerType          string        `json:"playerType"` // pve | pvp | pvpve — тип игроков (пул основных заданий/контрактов)
 	Status              string        `json:"status"`
 	TotalRounds         int           `json:"totalRounds"`
+	RatingMultiplier    int           `json:"ratingMultiplier"` // жетон «×2 рейтинга»: 1 — обычный матч, 2 — считается за два (двойное Elo с компаундингом, W/L +2)
 	Maps                []string      `json:"maps"`
 	StartsAt            *time.Time    `json:"startsAt,omitempty"`
 	WinnerParticipantID *string       `json:"winnerParticipantId,omitempty"`
@@ -130,6 +131,95 @@ type LeaderboardRow struct {
 	Tournaments int    `json:"tournaments"`
 }
 
+// TeamMember — игрок в составе команды 2×2 (для командного лидерборда).
+type TeamMember struct {
+	UserID      string `json:"userId"`
+	Login       string `json:"login"`
+	DisplayName string `json:"displayName"`
+	AvatarURL   string `json:"avatarUrl"`
+}
+
+// TeamLeaderboardRow — строка рейтинга 2×2 по КОМАНДАМ (пара игроков = команда с одним MMR).
+// Ключ команды — неупорядоченная пара userId; wins/losses/games учитывают жетон ×2 (матч = 2).
+type TeamLeaderboardRow struct {
+	TeamKey string       `json:"teamKey"`
+	Mmr     int          `json:"mmr"`
+	Wins    int          `json:"wins"`
+	Losses  int          `json:"losses"`
+	Games   int          `json:"games"`
+	Members []TeamMember `json:"members"`
+}
+
+// MmrPoint — одна точка динамики MMR (для графика и ленты последних матчей).
+type MmrPoint struct {
+	TournamentID string     `json:"tournamentId"`
+	Title        string     `json:"title"`
+	Date         *time.Time `json:"date,omitempty"`
+	Opponent     string     `json:"opponent"`
+	OpponentKey  string     `json:"opponentKey,omitempty"` // login (1×1) или teamKey (2×2) — для ссылки
+	Map          string     `json:"map"`
+	Mmr          int        `json:"mmr"`   // MMR ПОСЛЕ матча
+	Delta        int        `json:"delta"` // изменение MMR (может быть двойным при жетоне ×2)
+	Win          bool       `json:"win"`
+	Mult         int        `json:"mult"` // множитель матча (2 = жетон ×2)
+}
+
+// MmrStats — сводная статистика по исходам (игрок 1×1 или команда 2×2). wins/losses/games
+// учитывают жетон ×2 (матч = 2). Streak-и — по хронологии матчей.
+type MmrStats struct {
+	FirstMatch        *time.Time `json:"firstMatch,omitempty"`
+	CurrentMmr        int        `json:"currentMmr"`
+	PeakMmr           int        `json:"peakMmr"`
+	Wins              int        `json:"wins"`
+	Losses            int        `json:"losses"`
+	Games             int        `json:"games"`
+	Winrate           int        `json:"winrate"` // проценты 0..100
+	BestWinStreak     int        `json:"bestWinStreak"`
+	BestLossStreak    int        `json:"bestLossStreak"`
+	CurrentStreakKind string     `json:"currentStreakKind"` // win | loss | ""
+	CurrentStreakLen  int        `json:"currentStreakLen"`
+	Place             int        `json:"place"` // место в турнирной таблице (0 = вне рейтинга)
+}
+
+// MapStat — сколько матчей/побед/поражений на конкретной карте.
+type MapStat struct {
+	Map    string `json:"map"`
+	Games  int    `json:"games"`
+	Wins   int    `json:"wins"`
+	Losses int    `json:"losses"`
+}
+
+// OpponentStat — head-to-head против конкретного соперника (игрока или команды).
+type OpponentStat struct {
+	Name    string `json:"name"`
+	Login   string `json:"login,omitempty"`   // соперник-игрок (1×1) — ссылка на профиль
+	TeamKey string `json:"teamKey,omitempty"` // соперник-команда (2×2) — ссылка на команду
+	Games   int    `json:"games"`
+	Wins    int    `json:"wins"`
+	Losses  int    `json:"losses"`
+}
+
+// TeamSummary — краткая карточка команды игрока (для списка команд в профиле).
+type TeamSummary struct {
+	TeamKey string       `json:"teamKey"`
+	Members []TeamMember `json:"members"`
+	Mmr     int          `json:"mmr"`
+	Wins    int          `json:"wins"`
+	Losses  int          `json:"losses"`
+	Games   int          `json:"games"`
+	Place   int          `json:"place"`
+}
+
+// TeamProfile — публичная страница команды 2×2 (GET /api/teams/{teamKey}).
+type TeamProfile struct {
+	TeamKey   string         `json:"teamKey"`
+	Members   []TeamMember   `json:"members"`
+	Stats     MmrStats       `json:"stats"`
+	Timeline  []MmrPoint     `json:"timeline"`
+	Maps      []MapStat      `json:"maps"`
+	Opponents []OpponentStat `json:"opponents"`
+}
+
 // PlayerHistoryItem — одно участие игрока в турнире (для профиля, B6).
 type PlayerHistoryItem struct {
 	TournamentID string     `json:"tournamentId"`
@@ -168,12 +258,18 @@ type PlayerStats struct {
 type PlayerProfile struct {
 	User        User                `json:"user"`
 	MmrSolo     int                 `json:"mmrSolo"` // MMR в режиме 1x1 (старт 1000)
-	MmrDuo      int                 `json:"mmrDuo"`  // MMR в режиме 2x2 (старт 1000)
+	MmrDuo      int                 `json:"mmrDuo"`  // лучший MMR среди команд игрока (2x2)
 	Points      int                 `json:"points"`
 	Wins        int                 `json:"wins"`
 	Tournaments int                 `json:"tournaments"`
 	Stats       PlayerStats         `json:"stats"`
 	History     []PlayerHistoryItem `json:"history"`
+	// Расширенная статистика 1×1 (по истории MMR) + аналитика + команды игрока.
+	Mmr1x1    MmrStats       `json:"mmr1x1"`
+	Timeline  []MmrPoint     `json:"timeline1x1"`  // динамика MMR 1×1 (для графика)
+	Maps1x1   []MapStat      `json:"maps1x1"`      // разбивка по картам
+	Opponents []OpponentStat `json:"opponents1x1"` // head-to-head
+	Teams     []TeamSummary  `json:"teams"`        // команды 2×2, где состоит игрок
 }
 
 // Highlight — пользовательский хайлайт (твич-клип, скачанный к нам, или загруженный файл).

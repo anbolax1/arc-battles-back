@@ -2,7 +2,24 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/go-chi/chi/v5"
 )
+
+// handleGetTeam — публичная страница команды 2×2: состав + статистика + аналитика + динамика MMR.
+func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "teamKey")
+	tp, ok, err := s.Store.TeamProfile(r.Context(), key)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "команда не найдена")
+		return
+	}
+	writeJSON(w, http.StatusOK, tp)
+}
 
 func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("mode")
@@ -21,10 +38,22 @@ func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 			seasonID = "" // активного нет — показываем за всё время
 		}
 	}
-	rows, err := s.Store.Leaderboard(r.Context(), mode, seasonID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	// 2×2 — рейтинг по КОМАНДАМ (пара игроков = команда с одним MMR); 1×1 — по игрокам.
+	var rows any
+	if mode == "2x2" {
+		teams, err := s.Store.TeamLeaderboard(r.Context(), seasonID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		rows = teams
+	} else {
+		players, err := s.Store.Leaderboard(r.Context(), mode, seasonID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		rows = players
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "seasonId": seasonID, "rows": rows})
 }

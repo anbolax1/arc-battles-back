@@ -11,13 +11,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at`
+const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at, rating_multiplier`
 
 func scanTournament(row pgx.Row) (models.Tournament, error) {
 	var t models.Tournament
 	var mapsRaw []byte
 	err := row.Scan(&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
-		&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt)
+		&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier)
 	if err != nil {
 		return t, err
 	}
@@ -44,12 +44,15 @@ func (s *Store) CreateTournament(ctx context.Context, t models.Tournament) (mode
 	t.PlayerType = NormalizePlayerType(t.PlayerType)
 	// Ровно 1 раунд на турнир (один раунд = один рейд) — менять нельзя.
 	t.TotalRounds = 1
+	if t.RatingMultiplier < 1 {
+		t.RatingMultiplier = 1
+	}
 	// season_id — текущий активный сезон (подзапросом): новые турниры идут в него.
 	const q = `
-		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, season_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1))
+		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, season_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1))
 		RETURNING ` + tournamentCols
-	created, err := scanTournament(s.Pool.QueryRow(ctx, q, t.Title, t.Mode, t.PlayerType, t.Status, t.TotalRounds, string(maps), t.StartsAt))
+	created, err := scanTournament(s.Pool.QueryRow(ctx, q, t.Title, t.Mode, t.PlayerType, t.Status, t.TotalRounds, string(maps), t.StartsAt, t.RatingMultiplier))
 	if err != nil {
 		return created, err
 	}
@@ -79,7 +82,7 @@ func NormalizePlayerType(p string) string {
 
 // UpdateTournamentMeta частично правит «шапку» турнира: название, тип игроков и/или время начала.
 // startsAtSet=true со startsAt=nil очищает дату (NULL). ErrNotFound — если турнира нет.
-func (s *Store) UpdateTournamentMeta(ctx context.Context, id string, title, playerType *string, startsAtSet bool, startsAt *time.Time) error {
+func (s *Store) UpdateTournamentMeta(ctx context.Context, id string, title, playerType *string, ratingMultiplier *int, startsAtSet bool, startsAt *time.Time) error {
 	sets := []string{}
 	args := []any{}
 	n := 1
@@ -91,6 +94,15 @@ func (s *Store) UpdateTournamentMeta(ctx context.Context, id string, title, play
 	if playerType != nil {
 		sets = append(sets, fmt.Sprintf("player_type = $%d", n))
 		args = append(args, NormalizePlayerType(*playerType))
+		n++
+	}
+	if ratingMultiplier != nil {
+		m := *ratingMultiplier
+		if m < 1 {
+			m = 1
+		}
+		sets = append(sets, fmt.Sprintf("rating_multiplier = $%d", n))
+		args = append(args, m)
 		n++
 	}
 	if startsAtSet {
@@ -170,7 +182,7 @@ func (s *Store) ListTournaments(ctx context.Context, status string) ([]models.To
 		var t models.Tournament
 		var mapsRaw []byte
 		if err := rows.Scan(&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
-			&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.ParticipantCount, &t.HasSpace); err != nil {
+			&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.ParticipantCount, &t.HasSpace); err != nil {
 			return nil, err
 		}
 		if len(mapsRaw) > 0 {

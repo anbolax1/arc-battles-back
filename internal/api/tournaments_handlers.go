@@ -33,11 +33,12 @@ func (s *Server) handleGetTournament(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateTournament(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Title      string     `json:"title"`
-		Mode       string     `json:"mode"`
-		PlayerType string     `json:"playerType"`
-		Maps       []string   `json:"maps"`
-		StartsAt   *time.Time `json:"startsAt"`
+		Title            string     `json:"title"`
+		Mode             string     `json:"mode"`
+		PlayerType       string     `json:"playerType"`
+		RatingMultiplier int        `json:"ratingMultiplier"` // жетон ×2 рейтинга (1 или 2)
+		Maps             []string   `json:"maps"`
+		StartsAt         *time.Time `json:"startsAt"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
@@ -49,11 +50,12 @@ func (s *Server) handleCreateTournament(w http.ResponseWriter, r *http.Request) 
 	}
 	// Ровно 1 раунд на турнир — фиксируется в store (TotalRounds игнорируется).
 	t, err := s.Store.CreateTournament(r.Context(), models.Tournament{
-		Title:      strings.TrimSpace(body.Title),
-		Mode:       body.Mode,
-		PlayerType: body.PlayerType,
-		Maps:       body.Maps,
-		StartsAt:   body.StartsAt,
+		Title:            strings.TrimSpace(body.Title),
+		Mode:             body.Mode,
+		PlayerType:       body.PlayerType,
+		RatingMultiplier: body.RatingMultiplier,
+		Maps:             body.Maps,
+		StartsAt:         body.StartsAt,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -69,15 +71,16 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 		WinnerParticipantID *string         `json:"winnerParticipantId"`
 		Title               *string         `json:"title"`
 		PlayerType          *string         `json:"playerType"`
-		StartsAt            json.RawMessage `json:"startsAt"` // ключ присутствует → ставим (null = очистить); отсутствует → не трогаем
+		RatingMultiplier    *int            `json:"ratingMultiplier"` // жетон ×2 рейтинга (1 или 2)
+		StartsAt            json.RawMessage `json:"startsAt"`         // ключ присутствует → ставим (null = очистить); отсутствует → не трогаем
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
 
-	// Правка «шапки»: название, тип игроков и/или время начала.
-	if body.Title != nil || body.PlayerType != nil || body.StartsAt != nil {
+	// Правка «шапки»: название, тип игроков, множитель рейтинга и/или время начала.
+	if body.Title != nil || body.PlayerType != nil || body.RatingMultiplier != nil || body.StartsAt != nil {
 		var title *string
 		if body.Title != nil {
 			t := strings.TrimSpace(*body.Title)
@@ -100,7 +103,7 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 				startsAt = &ts
 			}
 		}
-		if err := s.Store.UpdateTournamentMeta(r.Context(), id, title, body.PlayerType, startsAtSet, startsAt); errors.Is(err, store.ErrNotFound) {
+		if err := s.Store.UpdateTournamentMeta(r.Context(), id, title, body.PlayerType, body.RatingMultiplier, startsAtSet, startsAt); errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "турнир не найден")
 			return
 		} else if err != nil {
