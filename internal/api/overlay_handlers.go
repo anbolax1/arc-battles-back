@@ -11,10 +11,13 @@ import (
 )
 
 // stateEnvelope оборачивает сырое состояние оверлея в конверт для WS/клиента.
-func stateEnvelope(stateJSON []byte) ([]byte, error) {
+// presetsRev — счётчик правок пресетов: по его смене страницы /overlay/<slug>
+// перечитывают свою раскладку (у них она не из состояния, а из пресета).
+func (s *Server) stateEnvelope(stateJSON []byte) ([]byte, error) {
 	return json.Marshal(map[string]any{
-		"type":  "state",
-		"state": json.RawMessage(stateJSON),
+		"type":       "state",
+		"state":      json.RawMessage(stateJSON),
+		"presetsRev": s.presetsRev.Load(),
 	})
 }
 
@@ -116,7 +119,7 @@ func (s *Server) handlePutOverlayState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if env, err := stateEnvelope(norm); err == nil {
+	if env, err := s.stateEnvelope(norm); err == nil {
 		s.Hub.Broadcast(env)
 	}
 	writeRaw(w, http.StatusOK, norm)
@@ -139,7 +142,7 @@ func (s *Server) handleOverlayWS(w http.ResponseWriter, r *http.Request) {
 	defer s.Hub.Unregister(client)
 
 	// Отправляем актуальное состояние сразу при подключении (с учётом live-турнира из БД).
-	if env, err := stateEnvelope(s.overlayStateBytes(r.Context())); err == nil {
+	if env, err := s.stateEnvelope(s.overlayStateBytes(r.Context())); err == nil {
 		_ = c.Write(ctx, websocket.MessageText, env)
 	}
 

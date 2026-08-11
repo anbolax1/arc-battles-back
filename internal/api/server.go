@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/battle-for-respect/backend/internal/auth"
@@ -19,6 +20,12 @@ type Server struct {
 	Store *store.Store
 	Hub   *ws.Hub
 	Media *media.Processor
+
+	// presetsRev — счётчик правок пресетов оверлея. Едет в конверте состояния по WS;
+	// оверлеи, привязанные к пресету ссылкой, по его смене перечитывают раскладку.
+	// В памяти (перезапуск обнуляет) — клиенты увидят «другое» значение и перечитают
+	// пресет лишний раз, что безвредно.
+	presetsRev atomic.Int64
 
 	// dummyHash — фиктивный bcrypt-хеш для выравнивания времени ответа на вход
 	// несуществующего логина (защита от перебора пользователей по таймингу).
@@ -74,6 +81,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/legendary", s.handleListLegendary)
 		r.Get("/overlay/state", s.handleGetOverlayState)
 		r.Get("/overlay/layout", s.handleGetOverlayLayout)
+		r.Get("/overlay/preset/{key}", s.handleGetOverlayPreset) // раскладка для ссылки /overlay/<slug> в OBS
 		r.Get("/ws/overlay", s.handleOverlayWS)
 		r.Get("/highlights", s.handleListHighlights)
 		r.Get("/media/*", s.handleServeMedia)

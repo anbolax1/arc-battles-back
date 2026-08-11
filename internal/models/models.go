@@ -452,9 +452,11 @@ type OverlayBg struct {
 
 // OverlayPreset — общий (глобальный) сохранённый шаблон раскладки. layout хранится
 // «как есть» (json.RawMessage = полный OverlayLayout), чтобы не зависеть от полей модели.
+// Slug — адрес пресета в ссылке для OBS (/overlay/<slug>): по источнику на сцену.
 type OverlayPreset struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
+	Slug      string          `json:"slug"`
 	Layout    json.RawMessage `json:"layout"`
 	CreatedAt time.Time       `json:"createdAt"`
 	UpdatedAt time.Time       `json:"updatedAt"`
