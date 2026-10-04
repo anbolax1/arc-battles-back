@@ -18,7 +18,9 @@ func (s *Server) publishMatchOverlay(ctx context.Context, tournamentID string) {
 	data, _ := s.Store.GetLiveState(ctx)
 	var stored models.LiveState
 	_ = json.Unmarshal(data, &stored)
-	norm, err := json.Marshal(buildMatchLiveState(st, stored))
+	ls := buildMatchLiveState(st, stored)
+	s.addStandingRatings(ctx, st, &ls)
+	norm, err := json.Marshal(ls)
 	if err != nil {
 		return
 	}
@@ -27,6 +29,38 @@ func (s *Server) publishMatchOverlay(ctx context.Context, tournamentID string) {
 	}
 	if env, err := s.stateEnvelope(norm); err == nil {
 		s.Hub.Broadcast(env)
+	}
+}
+
+// addStandingRatings добавляет сторонам табло MMR и место в таблице сезона; у завершённого матча
+// MMR берётся из его итога, чтобы рядом показать изменение.
+func (s *Server) addStandingRatings(ctx context.Context, st models.MatchState, ls *models.LiveState) {
+	users := map[string]string{}
+	for _, p := range st.Tournament.Participants {
+		if p.UserID != nil {
+			users[p.ID] = *p.UserID
+		}
+	}
+	changes := map[string]models.ParticipantMmr{}
+	if st.Stage == "finished" {
+		for _, c := range st.Tournament.MmrChanges {
+			changes[c.ParticipantID] = c
+		}
+	}
+	for i := range ls.Standings {
+		sd := &ls.Standings[i]
+		uid := users[sd.ParticipantID]
+		if uid == "" {
+			continue
+		}
+		if c, ok := changes[sd.ParticipantID]; ok {
+			sd.Mmr, sd.MmrDelta = c.After, c.Delta
+		} else if mmr, err := s.Store.GetUserMmr(ctx, uid, "1x1"); err == nil {
+			sd.Mmr = mmr
+		}
+		if place, err := s.Store.Player1x1Place(ctx, uid); err == nil {
+			sd.Place = place
+		}
 	}
 }
 

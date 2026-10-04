@@ -469,8 +469,11 @@ type LiveVeto struct {
 type LiveStanding struct {
 	ParticipantID string `json:"participantId,omitempty"`
 	Name          string `json:"name"`
-	Points        int    `json:"points"`      // всего по турниру
-	RoundPoints   int    `json:"roundPoints"` // очки за текущий раунд (для опции в табло)
+	Points        int    `json:"points"`             // всего по турниру
+	RoundPoints   int    `json:"roundPoints"`        // очки за текущий раунд (для опции в табло)
+	Mmr           int    `json:"mmr,omitempty"`      // MMR сезона; после матча - уже с его итогом
+	MmrDelta      int    `json:"mmrDelta,omitempty"` // изменение MMR за завершённый матч
+	Place         int    `json:"place,omitempty"`    // место в таблице 1×1 сезона; 0 - в сезоне ещё не играл
 }
 
 // LiveBonus — контракт стороны в оверлее (виджет «Контракты»).
@@ -564,6 +567,8 @@ type WidgetInstance struct {
 	HidePenalty    bool            `json:"hidePenalty,omitempty"`           // усложнения: не показывать плашку «ШТРАФ» при нарушении
 	ShowRoundScore bool            `json:"showRoundScore,omitempty"`        // табло: очки за раунд в скобках у счёта
 	ShowOpponentCs bool            `json:"showOpponentContracts,omitempty"` // контракты: показывать и контракты противника
+	ShowMmr        bool            `json:"showMmr,omitempty"`               // табло: MMR сторон
+	ShowPlace      bool            `json:"showPlace,omitempty"`             // табло: места сторон в таблице сезона
 	Anchor         string          `json:"anchor,omitempty"`                // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
 	Bg             OverlayBg       `json:"bg"`
 	Accent         string          `json:"accent,omitempty"`
