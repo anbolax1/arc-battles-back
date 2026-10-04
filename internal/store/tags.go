@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/battle-for-respect/backend/internal/models"
@@ -29,6 +30,22 @@ const tagCols = `t.id, t.name, t.color, t.visible, COALESCE(t.role, ''), t.seaso
 // tagOrder - сначала роли, затем победители сезонов (свежие выше), затем остальные.
 const tagOrder = `(t.role IS NULL), (t.season_id IS NULL), sn.started_at DESC`
 
+// roleLevel - уровень роли из колонки col по той же иерархии, что и права доступа; 0 - не роль.
+func roleLevel(col string) string {
+	var b strings.Builder
+	b.WriteString("CASE " + col)
+	for _, r := range models.Roles() {
+		fmt.Fprintf(&b, " WHEN '%s' THEN %d", r, r.Level())
+	}
+	b.WriteString(" ELSE 0 END")
+	return b.String()
+}
+
+// holdsRoleTag - у пользователя есть тег роли, если его роль не ниже: организатор тоже игрок.
+func holdsRoleTag(user, tag string) string {
+	return roleLevel(tag+".role") + " > 0 AND " + roleLevel(user+".role") + " >= " + roleLevel(tag+".role")
+}
+
 func scanTag(row pgx.Row) (models.Tag, error) {
 	var t models.Tag
 	err := row.Scan(&t.ID, &t.Name, &t.Color, &t.Visible, &t.Role, &t.SeasonID, &t.SeasonName)
@@ -37,11 +54,11 @@ func scanTag(row pgx.Row) (models.Tag, error) {
 
 func autoTag(t models.Tag) bool { return t.Role != "" || t.SeasonID != nil }
 
-// ListTags - все теги с теми, кому они выданы; у тега роли вместо списка - сколько людей с этой ролью.
+// ListTags - все теги с теми, кому они выданы; у тега роли вместо списка - сколько у него держателей.
 func (s *Store) ListTags(ctx context.Context) ([]models.Tag, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT `+tagCols+`, CASE WHEN t.role IS NOT NULL
-		         THEN (SELECT COUNT(*) FROM users u WHERE u.role = t.role)
+		         THEN (SELECT COUNT(*) FROM users u WHERE `+holdsRoleTag("u", "t")+`)
 		         ELSE (SELECT COUNT(*) FROM user_tags ut WHERE ut.tag_id = t.id) END
 		FROM tags t LEFT JOIN seasons sn ON sn.id = t.season_id
 		ORDER BY `+tagOrder+`, lower(t.name)`)
@@ -148,8 +165,8 @@ func (s *Store) SetTagHolder(ctx context.Context, tagID, userID string, on bool)
 	return err
 }
 
-// TagsForUsers - теги игроков по их id, тег роли первым; onlyVisible оставляет те, что видны на сайте:
-// их показывает организатор и не скрыл сам игрок.
+// TagsForUsers - теги игроков по их id, теги ролей первыми (старшая роль выше); onlyVisible оставляет
+// те, что видны на сайте: их показывает организатор и не скрыл сам игрок.
 func (s *Store) TagsForUsers(ctx context.Context, userIDs []string, onlyVisible bool) (map[string][]models.UserTag, error) {
 	out := map[string][]models.UserTag{}
 	if len(userIDs) == 0 {
@@ -160,7 +177,7 @@ func (s *Store) TagsForUsers(ctx context.Context, userIDs []string, onlyVisible 
 		       EXISTS (SELECT 1 FROM user_hidden_tags uh WHERE uh.user_id = x.user_id AND uh.tag_id = t.id) AS hidden
 		FROM (
 			SELECT u.id AS user_id, r.id AS tag_id, u.created_at AS given_at
-			FROM users u JOIN tags r ON r.role = u.role WHERE u.id = ANY($1)
+			FROM users u JOIN tags r ON `+holdsRoleTag("u", "r")+` WHERE u.id = ANY($1)
 			UNION ALL
 			SELECT ut.user_id, ut.tag_id, ut.created_at FROM user_tags ut WHERE ut.user_id = ANY($1)
 		) x
@@ -168,7 +185,7 @@ func (s *Store) TagsForUsers(ctx context.Context, userIDs []string, onlyVisible 
 		LEFT JOIN seasons sn ON sn.id = t.season_id
 		WHERE NOT $2 OR (t.visible AND NOT EXISTS (
 			SELECT 1 FROM user_hidden_tags uh WHERE uh.user_id = x.user_id AND uh.tag_id = t.id))
-		ORDER BY `+tagOrder+`, x.given_at`, userIDs, onlyVisible)
+		ORDER BY `+tagOrder+`, `+roleLevel("t.role")+` DESC, x.given_at`, userIDs, onlyVisible)
 	if err != nil {
 		return nil, err
 	}

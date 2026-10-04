@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"math"
+	"sort"
 	"time"
 )
 
@@ -33,6 +34,16 @@ func (r Role) AtLeast(min Role) bool { return r.Level() >= min.Level() }
 // Valid сообщает, известна ли роль.
 func (r Role) Valid() bool { _, ok := roleLevels[r]; return ok }
 
+// Roles - все роли от младшей к старшей.
+func Roles() []Role {
+	out := make([]Role, 0, len(roleLevels))
+	for r := range roleLevels {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Level() < out[j].Level() })
+	return out
+}
+
 type User struct {
 	ID          string    `json:"id"`
 	Login       string    `json:"login"`
@@ -55,7 +66,7 @@ type UserTag struct {
 	HiddenByUser bool   `json:"hiddenByUser,omitempty"`
 }
 
-// Tag - тег в кабинете вместе с теми, кому он выдан. Тег с ролью есть у всех с этой ролью,
+// Tag - тег в кабинете вместе с теми, кому он выдан. Тег с ролью есть у всех с этой ролью и выше,
 // тег с сезоном выдаётся сам победителю сезона.
 type Tag struct {
 	UserTag
