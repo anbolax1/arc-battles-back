@@ -153,6 +153,52 @@ type MatchState struct {
 	Log          []MatchLogEntry       `json:"log"`
 }
 
+// Matchup - противостояние сторон для страницы матча: рейтинг, что стоит на кону, личные встречи.
+type Matchup struct {
+	Season     *SeasonRef    `json:"season,omitempty"`
+	Sides      []MatchupSide `json:"sides"` // по порядку: A, B
+	HeadToHead HeadToHead    `json:"headToHead"`
+}
+
+// SeasonRef - сезон, в зачёт которого идёт матч.
+type SeasonRef struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	KFactor int    `json:"kFactor"`
+}
+
+// MatchupSide - сторона матча. У сыгранного матча Mmr - рейтинг перед ним, у остальных - текущий,
+// вместе с местом и счётом в сезоне и тем, сколько MMR стоит на кону.
+type MatchupSide struct {
+	ParticipantID string       `json:"participantId"`
+	TeamKey       string       `json:"teamKey,omitempty"`
+	Players       []TeamMember `json:"players"`
+	Mmr           int          `json:"mmr"`             // 0 - неизвестен: матч не менял рейтинг
+	Place         int          `json:"place,omitempty"` // место в таблице сезона
+	Wins          int          `json:"wins"`
+	Losses        int          `json:"losses"`
+	IsNew         bool         `json:"isNew"`               // в сезоне ещё не играл
+	WinChance     int          `json:"winChance,omitempty"` // шанс победы по MMR, проценты
+	WinGain       int          `json:"winGain,omitempty"`   // MMR за победу
+	LossDrop      int          `json:"lossDrop,omitempty"`  // MMR за поражение
+}
+
+// HeadToHead - другие сыгранные матчи тех же сторон друг против друга. Матч ×2 прошлых сезонов
+// идёт в счёт за два, как в таблице.
+type HeadToHead struct {
+	Wins    [2]int            `json:"wins"` // победы A и B
+	Draws   int               `json:"draws"`
+	Matches []HeadToHeadMatch `json:"matches"` // последние, свежие сверху
+}
+
+type HeadToHeadMatch struct {
+	TournamentID string     `json:"tournamentId"`
+	Date         *time.Time `json:"date,omitempty"`
+	Winner       int        `json:"winner"` // 0 - A, 1 - B, -1 - ничья
+	Map          string     `json:"map,omitempty"`
+	Games        int        `json:"games"`
+}
+
 // MatchPlayer - игрок для выбора стороны матча: MMR и счёт в текущем сезоне.
 type MatchPlayer struct {
 	ID            string `json:"id"`

@@ -49,6 +49,32 @@ func (s *Server) handleGetMatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// GET /api/tournaments/{id}/matchup - стороны для страницы матча: рейтинг, что на кону, личные встречи.
+func (s *Server) handleMatchup(w http.ResponseWriter, r *http.Request) {
+	m, err := s.Store.Matchup(r.Context(), chi.URLParam(r, "id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "матч не найден")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ids := []string{}
+	for _, sd := range m.Sides {
+		for _, p := range sd.Players {
+			ids = append(ids, p.UserID)
+		}
+	}
+	tags := s.siteTags(r.Context(), ids)
+	for i := range m.Sides {
+		for j := range m.Sides[i].Players {
+			m.Sides[i].Players[j].Tags = tags[m.Sides[i].Players[j].UserID]
+		}
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
 // writeMatch отвечает свежим состоянием матча и обновляет оверлей. Запланированный шоу-матч оверлей
 // не трогает: там остаётся текущий матч.
 func (s *Server) writeMatch(w http.ResponseWriter, r *http.Request, tournamentID string, status int) {
