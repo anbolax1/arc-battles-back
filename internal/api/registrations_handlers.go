@@ -8,9 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// handleRegister — подача заявки в общий пул (без привязки к турниру).
-// Embark ID берём из профиля пользователя (он редактируется в кабинете и почти не
-// меняется), а не из тела заявки. Без заполненного Embark ID заявку не принимаем.
+// handleRegister - подача заявки в общий пул. Embark ID берётся из профиля; его можно дописать
+// и позже - он сам подставится в заявку, пока та в пуле.
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
 	var body struct {
@@ -20,12 +19,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	embark := strings.TrimSpace(u.EmbarkID)
-	if embark == "" {
-		writeError(w, http.StatusBadRequest, "сначала укажите Embark ID в профиле")
-		return
-	}
-	reg, err := s.Store.CreateRegistration(r.Context(), u.ID, embark, strings.TrimSpace(body.Note))
+	reg, err := s.Store.CreateRegistration(r.Context(), u.ID, strings.TrimSpace(u.EmbarkID), strings.TrimSpace(body.Note))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
