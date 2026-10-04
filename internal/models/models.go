@@ -445,11 +445,16 @@ type PlayerProfile struct {
 	Stats       PlayerStats         `json:"stats"`
 	History     []PlayerHistoryItem `json:"history"`
 	// Расширенная статистика 1×1 (по истории MMR) + аналитика + команды игрока.
-	Mmr1x1    MmrStats       `json:"mmr1x1"`
-	Timeline  []MmrPoint     `json:"timeline1x1"`  // динамика MMR 1×1 (для графика)
-	Maps1x1   []MapStat      `json:"maps1x1"`      // разбивка по картам
-	Opponents []OpponentStat `json:"opponents1x1"` // head-to-head
-	Teams     []TeamSummary  `json:"teams"`        // команды 2×2, где состоит игрок
+	Mmr1x1    MmrStats                   `json:"mmr1x1"`
+	Timeline  []MmrPoint                 `json:"timeline1x1"`  // динамика MMR 1×1 (для графика)
+	Analytics map[string]SeasonAnalytics `json:"analytics1x1"` // по картам и соперникам; ключ - сезон, пусто - вне сезонов
+	Teams     []TeamSummary              `json:"teams"`        // команды 2×2, где состоит игрок
+}
+
+// SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам.
+type SeasonAnalytics struct {
+	Maps      []MapStat      `json:"maps"`
+	Opponents []OpponentStat `json:"opponents"`
 }
 
 // Highlight — пользовательский хайлайт (твич-клип, скачанный к нам, или загруженный файл).

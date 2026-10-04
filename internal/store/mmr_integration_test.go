@@ -192,7 +192,7 @@ func TestMMRIntegration(t *testing.T) {
 	}
 
 	// --- Статистика игрока 1×1 (A победил B) ---
-	st1, tl1, mp1, op1, err := st.PlayerStatsBundle(ctx, a.ID)
+	st1, tl1, an1, err := st.PlayerStatsBundle(ctx, a.ID)
 	if err != nil {
 		t.Fatalf("PlayerStatsBundle: %v", err)
 	}
@@ -202,11 +202,16 @@ func TestMMRIntegration(t *testing.T) {
 	if st1.Winrate != 100 || st1.BestWinStreak != 1 || st1.Place < 1 {
 		t.Errorf("player a stats winrate/streak/place = %+v", st1)
 	}
-	if len(tl1) != 1 || len(mp1) != 1 || len(op1) != 1 {
-		t.Errorf("player a timeline/maps/opps len = %d/%d/%d, want 1/1/1", len(tl1), len(mp1), len(op1))
+	if len(tl1) != 1 || len(an1) != 1 {
+		t.Errorf("player a timeline/seasons len = %d/%d, want 1/1", len(tl1), len(an1))
 	}
-	if len(op1) == 1 && op1[0].Login != b.Login {
-		t.Errorf("player a opponent login = %q, want %q", op1[0].Login, b.Login)
+	for season, sa := range an1 {
+		if len(sa.Maps) != 1 || len(sa.Opponents) != 1 {
+			t.Errorf("player a season %q maps/opps len = %d/%d, want 1/1", season, len(sa.Maps), len(sa.Opponents))
+		}
+		if len(sa.Opponents) == 1 && sa.Opponents[0].Login != b.Login {
+			t.Errorf("player a opponent login = %q, want %q", sa.Opponents[0].Login, b.Login)
+		}
 	}
 
 	// --- Статистика команды 2×2 (E,F) ---

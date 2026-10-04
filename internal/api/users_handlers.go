@@ -163,7 +163,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 	// 2×2 — рейтинг у команд; для профиля показываем лучший MMR среди команд игрока.
 	mmrDuo, _ := s.Store.BestTeamMmr(r.Context(), u.ID)
 	// Расширенная статистика 1×1 (по истории MMR) + аналитика + команды игрока.
-	mmr1x1, timeline, maps1x1, opps, _ := s.Store.PlayerStatsBundle(r.Context(), u.ID)
+	mmr1x1, timeline, analytics, _ := s.Store.PlayerStatsBundle(r.Context(), u.ID)
 	teams, _ := s.Store.TeamsForUser(r.Context(), u.ID)
 	writeJSON(w, http.StatusOK, models.PlayerProfile{
 		User:        u,
@@ -176,8 +176,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		History:     history,
 		Mmr1x1:      mmr1x1,
 		Timeline:    timeline,
-		Maps1x1:     maps1x1,
-		Opponents:   opps,
+		Analytics:   analytics,
 		Teams:       teams,
 	})
 }

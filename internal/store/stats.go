@@ -31,6 +31,9 @@ const (
 	mapStatName = `COALESCE((array_agg(mm.map ORDER BY mm.map = upper(mm.map), mm.map))[1], '')`
 )
 
+// noMapName - строка статистики для матчей, у которых карта не записана.
+const noMapName = "Без карты"
+
 // ================== Общая агрегация статистики из ленты матчей ==================
 
 // computeMmrStats считает сводку по хронологической (ASC) ленте матчей: первый матч, пик MMR,
@@ -112,11 +115,11 @@ func (s *Store) Player1x1Timeline(ctx context.Context, userID string) ([]models.
 	return s.scanTimeline(ctx, q, userID)
 }
 
-// Player1x1Maps — разбивка матчей 1×1 по картам (взвешенно по ×2); матч на нескольких картах
-// засчитан на каждую.
-func (s *Store) Player1x1Maps(ctx context.Context, userID string) ([]models.MapStat, error) {
+// Player1x1MapsBySeason — разбивка матчей 1×1 по картам в каждом сезоне (взвешенно по ×2); матч на
+// нескольких картах засчитан на каждую. Ключ - сезон, пусто - матчи вне сезонов.
+func (s *Store) Player1x1MapsBySeason(ctx context.Context, userID string) (map[string][]models.MapStat, error) {
 	const q = `
-		SELECT ` + mapStatName + ` AS mp,
+		SELECT COALESCE(h.season_key, '') AS season, ` + mapStatName + ` AS mp,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0), 0)::int AS wins,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
@@ -124,15 +127,34 @@ func (s *Store) Player1x1Maps(ctx context.Context, userID string) ([]models.MapS
 		JOIN tournaments t ON t.id = h.tournament_id
 		` + matchMapsJoin + `
 		WHERE h.user_id = $1 AND h.mode = '1x1'
-		GROUP BY ` + mapStatKey + `
-		ORDER BY games DESC, mp`
-	return s.scanMapStats(ctx, q, userID)
+		GROUP BY season, ` + mapStatKey + `
+		ORDER BY season, games DESC, mp`
+	rows, err := s.Pool.Query(ctx, q, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]models.MapStat{}
+	for rows.Next() {
+		var season string
+		var m models.MapStat
+		if err := rows.Scan(&season, &m.Map, &m.Wins, &m.Losses, &m.Games); err != nil {
+			return nil, err
+		}
+		if m.Map == "" {
+			m.Map = noMapName
+		}
+		out[season] = append(out[season], m)
+	}
+	return out, rows.Err()
 }
 
-// Player1x1Opponents — head-to-head игрока в 1×1 (взвешенно по ×2), по убыванию числа матчей.
-func (s *Store) Player1x1Opponents(ctx context.Context, userID string) ([]models.OpponentStat, error) {
+// Player1x1OpponentsBySeason — head-to-head игрока в 1×1 в каждом сезоне (взвешенно по ×2), частые
+// соперники сверху. Ключ - сезон, пусто - матчи вне сезонов.
+func (s *Store) Player1x1OpponentsBySeason(ctx context.Context, userID string) (map[string][]models.OpponentStat, error) {
 	const q = `
-		SELECT COALESCE(uu.login, '') AS opp_login, COALESCE(opp.name, '') AS opp_name,
+		SELECT COALESCE(h.season_key, '') AS season,
+		       COALESCE(uu.login, '') AS opp_login, COALESCE(opp.name, '') AS opp_name,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0), 0)::int AS wins,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
@@ -145,20 +167,21 @@ func (s *Store) Player1x1Opponents(ctx context.Context, userID string) ([]models
 		) opp ON true
 		LEFT JOIN users uu ON uu.id = opp.user_id
 		WHERE h.user_id = $1 AND h.mode = '1x1'
-		GROUP BY opp_login, opp_name
-		ORDER BY games DESC, opp_name`
+		GROUP BY season, opp_login, opp_name
+		ORDER BY season, games DESC, opp_name`
 	rows, err := s.Pool.Query(ctx, q, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []models.OpponentStat{}
+	out := map[string][]models.OpponentStat{}
 	for rows.Next() {
+		var season string
 		var o models.OpponentStat
-		if err := rows.Scan(&o.Login, &o.Name, &o.Wins, &o.Losses, &o.Games); err != nil {
+		if err := rows.Scan(&season, &o.Login, &o.Name, &o.Wins, &o.Losses, &o.Games); err != nil {
 			return nil, err
 		}
-		out = append(out, o)
+		out[season] = append(out[season], o)
 	}
 	return out, rows.Err()
 }
@@ -388,7 +411,7 @@ func (s *Store) scanMapStats(ctx context.Context, q, arg string) ([]models.MapSt
 			return nil, err
 		}
 		if m.Map == "" {
-			m.Map = "Без карты"
+			m.Map = noMapName
 		}
 		out = append(out, m)
 	}
@@ -410,19 +433,27 @@ func joinTeamName(a, b string) string {
 	return strings.Join(parts, " & ")
 }
 
-// PlayerStatsBundle собирает расширенную статистику 1×1 игрока (лента, сводка, карты, соперники).
-func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.MmrStats, []models.MmrPoint, []models.MapStat, []models.OpponentStat, error) {
+// PlayerStatsBundle собирает расширенную статистику 1×1 игрока: ленту, сводку и разбивку по картам и
+// соперникам отдельно по сезонам - в каждом сезоне рейтинг начинается заново.
+func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.MmrStats, []models.MmrPoint, map[string]models.SeasonAnalytics, error) {
 	timeline, err := s.Player1x1Timeline(ctx, userID)
 	if err != nil {
-		return models.MmrStats{}, nil, nil, nil, err
+		return models.MmrStats{}, nil, nil, err
 	}
-	maps, err := s.Player1x1Maps(ctx, userID)
+	maps, err := s.Player1x1MapsBySeason(ctx, userID)
 	if err != nil {
-		return models.MmrStats{}, nil, nil, nil, err
+		return models.MmrStats{}, nil, nil, err
 	}
-	opps, err := s.Player1x1Opponents(ctx, userID)
+	opps, err := s.Player1x1OpponentsBySeason(ctx, userID)
 	if err != nil {
-		return models.MmrStats{}, nil, nil, nil, err
+		return models.MmrStats{}, nil, nil, err
+	}
+	analytics := map[string]models.SeasonAnalytics{}
+	for season := range maps {
+		analytics[season] = seasonAnalytics(maps[season], opps[season])
+	}
+	for season := range opps {
+		analytics[season] = seasonAnalytics(maps[season], opps[season])
 	}
 	stats := computeMmrStats(timeline)
 	// Лента - за все сезоны, а текущий MMR - в текущем сезоне (в начале сезона у всех стартовый).
@@ -432,7 +463,18 @@ func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.Mm
 	if place, err := s.Player1x1Place(ctx, userID); err == nil {
 		stats.Place = place
 	}
-	return stats, timeline, maps, opps, nil
+	return stats, timeline, analytics, nil
+}
+
+// seasonAnalytics - разбивка одного сезона; пустой список уходит массивом, а не null.
+func seasonAnalytics(maps []models.MapStat, opps []models.OpponentStat) models.SeasonAnalytics {
+	if maps == nil {
+		maps = []models.MapStat{}
+	}
+	if opps == nil {
+		opps = []models.OpponentStat{}
+	}
+	return models.SeasonAnalytics{Maps: maps, Opponents: opps}
 }
 
 // TeamProfile собирает полную статистику команды 2×2. ok=false — команды нет.
