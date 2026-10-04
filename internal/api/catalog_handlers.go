@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -40,6 +41,10 @@ type taskBody struct {
 	Source    string `json:"source"`
 	Author    string `json:"author"`
 	Title     string `json:"title"`
+	Name      string `json:"name"`
+	Category  string `json:"category"`
+	MapCode   string `json:"mapCode"`
+	Active    *bool  `json:"active"`
 }
 
 func (b taskBody) toModel() (models.CatalogTask, string, bool) {
@@ -47,14 +52,34 @@ func (b taskBody) toModel() (models.CatalogTask, string, bool) {
 	if !ok {
 		return models.CatalogTask{}, "", false
 	}
+	category := "task"
+	if b.Category == "protocol" {
+		category = "protocol"
+	}
+	points := b.Points
+	if points == 0 {
+		// Награды 3 сезона: задание - 2 балла, протокол - 1.
+		points = 2
+		if category == "protocol" {
+			points = 1
+		}
+	}
+	active := true
+	if b.Active != nil {
+		active = *b.Active
+	}
 	return models.CatalogTask{
 		Text:      strings.TrimSpace(b.Text),
-		Points:    b.Points,
+		Points:    points,
 		ValueType: vt,
 		Kind:      store.NormalizePlayerType(b.Kind),
 		Source:    defaultStr(b.Source, "official"),
 		Author:    strings.TrimSpace(b.Author),
 		Title:     strings.TrimSpace(b.Title),
+		Name:      strings.Trim(strings.TrimSpace(b.Name), "«»"),
+		Category:  category,
+		MapCode:   strings.TrimSpace(b.MapCode),
+		Active:    active,
 	}, vt, true
 }
 
@@ -114,6 +139,36 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /api/catalog/tasks/bulk {items: [...]} - добавить пачку заданий разом (вставка списка из таблицы).
+func (s *Server) handleBulkCreateTasks(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Items []taskBody `json:"items"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	if len(body.Items) == 0 || len(body.Items) > 500 {
+		writeError(w, http.StatusBadRequest, "нужно от 1 до 500 заданий")
+		return
+	}
+	out := make([]models.CatalogTask, 0, len(body.Items))
+	for i, b := range body.Items {
+		t, _, ok := b.toModel()
+		if t.Text == "" || !ok {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("строка %d: нужен текст задания", i+1))
+			return
+		}
+		created, err := s.Store.CreateCatalogTask(r.Context(), t)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, created)
+	}
+	writeJSON(w, http.StatusCreated, out)
 }
 
 // ---- Усложнения ----

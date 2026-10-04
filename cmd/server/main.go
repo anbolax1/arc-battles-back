@@ -36,6 +36,13 @@ func main() {
 
 	st := store.New(pool)
 
+	// Если миграция сменила правила подсчёта MMR, рейтинги пересчитываются до приёма запросов.
+	if done, err := st.RunPendingRecompute(ctx); err != nil {
+		log.Fatalf("пересчёт MMR: %v", err)
+	} else if done {
+		log.Println("MMR пересчитан по правилам сезонов")
+	}
+
 	// Бутстрап организатора: гарантируем аккаунт с ролью superadmin ДО приёма запросов,
 	// чтобы организаторский логин нельзя было перехватить через открытую регистрацию.
 	if cfg.SuperadminPassword != "" && cfg.SuperadminLogin != "" {

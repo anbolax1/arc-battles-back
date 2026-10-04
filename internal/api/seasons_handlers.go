@@ -23,7 +23,9 @@ func (s *Server) handleListSeasons(w http.ResponseWriter, r *http.Request) {
 // handleStartSeason (superadmin) — завершить текущий активный сезон и начать новый.
 func (s *Server) handleStartSeason(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
+		Name     string `json:"name"`
+		KFactor  int    `json:"kFactor"`
+		StartMmr int    `json:"startMmr"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
@@ -33,11 +35,17 @@ func (s *Server) handleStartSeason(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "укажите название сезона")
 		return
 	}
-	sn, err := s.Store.StartNewSeason(r.Context(), strings.TrimSpace(body.Name))
+	if msg := validSeasonRating(body.KFactor, body.StartMmr); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	sn, err := s.Store.StartNewSeason(r.Context(), strings.TrimSpace(body.Name), body.KFactor, body.StartMmr)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Новый сезон - рейтинг у всех с нуля: кэш MMR переключается на него.
+	_ = s.Store.RefreshMmrCaches(r.Context())
 	writeJSON(w, http.StatusCreated, sn)
 }
 
@@ -49,6 +57,8 @@ func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
 		Name      string     `json:"name"`
 		StartedAt time.Time  `json:"startedAt"`
 		EndedAt   *time.Time `json:"endedAt"`
+		KFactor   int        `json:"kFactor"`
+		StartMmr  int        `json:"startMmr"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
@@ -67,7 +77,11 @@ func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "дата окончания раньше даты начала")
 		return
 	}
-	sn, err := s.Store.UpdateSeason(r.Context(), id, name, body.StartedAt, body.EndedAt)
+	if msg := validSeasonRating(body.KFactor, body.StartMmr); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	prev, err := s.Store.GetSeason(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "сезон не найден")
 		return
@@ -75,6 +89,22 @@ func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	sn, err := s.Store.UpdateSeason(r.Context(), id, name, body.StartedAt, body.EndedAt, body.KFactor, body.StartMmr)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "сезон не найден")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Сменились правила рейтинга - матчи сезона пересчитываются заново.
+	if sn.KFactor != prev.KFactor || sn.StartMmr != prev.StartMmr {
+		if err := s.Store.RecomputeAllMmr(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, sn)
 }
@@ -92,5 +122,21 @@ func (s *Server) handleDeleteSeason(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Матчи сезона остались без сезона - их рейтинг считается по правилам «вне сезона».
+	if err := s.Store.RecomputeAllMmr(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// validSeasonRating проверяет правила рейтинга сезона; 0 - значение по умолчанию.
+func validSeasonRating(k, start int) string {
+	if k < 0 || k > 400 {
+		return "K-фактор — от 1 до 400"
+	}
+	if start < 0 || start > 10000 {
+		return "стартовый MMR — от 1 до 10000"
+	}
+	return ""
 }

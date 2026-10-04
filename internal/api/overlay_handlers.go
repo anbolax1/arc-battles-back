@@ -32,6 +32,10 @@ func (s *Server) overlayStateBytes(ctx context.Context) []byte {
 
 	live, _ := s.Store.ListTournaments(ctx, "live")
 	if len(live) == 0 {
+		// Итог завершённого матча остаётся на экране, пока не начнётся следующий.
+		if stored.Stage == "finished" {
+			return data
+		}
 		return []byte("{}")
 	}
 	lt := live[0]
@@ -118,6 +122,14 @@ func (s *Server) handlePutOverlayState(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.SetLiveState(r.Context(), norm); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// Счёт матча нового пульта считает сервер: из присланного берём только раскладку.
+	if id, err := s.Store.CurrentMatchID(r.Context()); err == nil && id != "" {
+		if st, err := s.Store.GetMatchState(r.Context(), id); err == nil && isMatchFlow(st) {
+			s.publishMatchOverlay(r.Context(), id)
+			writeRaw(w, http.StatusOK, s.overlayStateBytes(r.Context()))
+			return
+		}
 	}
 	if env, err := s.stateEnvelope(norm); err == nil {
 		s.Hub.Broadcast(env)

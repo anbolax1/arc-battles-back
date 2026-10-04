@@ -6,15 +6,29 @@ import (
 	"github.com/battle-for-respect/backend/internal/models"
 )
 
-// Leaderboard агрегирует сезонный рейтинг 1×1 по игрокам. В рейтинг идут ТОЛЬКО завершённые
-// турниры (status='finished'). MMR — сквозной по сезонам (старт 1000); сезонный фильтр влияет на
-// состав игроков и агрегаты wins/games/points. wins и games учитывают жетон ×2 (матч = 2).
+// seasonStart - стартовый MMR сезона для таблицы: конкретного сезона либо текущего (для «за всё время»).
+func (s *Store) seasonStart(ctx context.Context, seasonID string) int {
+	if seasonID == "" {
+		return s.activeSeasonRule(ctx).Start
+	}
+	if sn, err := s.GetSeason(ctx, seasonID); err == nil {
+		return sn.StartMmr
+	}
+	return StartMmr
+}
+
+// Leaderboard агрегирует рейтинг 1×1 по игрокам. В рейтинг идут ТОЛЬКО завершённые турниры
+// (status='finished'). MMR считается внутри сезона: в таблице сезона - MMR этого сезона, в таблице
+// «за всё время» - MMR текущего сезона. wins и games учитывают жетон ×2 (матч = 2).
 //
 //	seasonID="" — за всё время; иначе только турниры этого сезона.
 func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]models.LeaderboardRow, error) {
 	const q = `
 		SELECT u.id, u.login, u.display_name, u.avatar_url,
-		       COALESCE(um.mmr, 1000)::int AS mmr,
+		       (CASE WHEN $1 = '' THEN COALESCE(um.mmr, $2::int)
+		             ELSE $2::int + COALESCE((SELECT SUM(h.delta) FROM mmr_history h
+		                  WHERE h.user_id = u.id AND h.mode = '1x1' AND h.season_key = $1), 0)
+		        END)::int AS mmr,
 		       COALESCE(SUM(p.total_points), 0)::int AS points,
 		       COALESCE(SUM(CASE WHEN t.winner_participant_id = p.id THEN t.rating_multiplier ELSE 0 END), 0)::int AS wins,
 		       COALESCE(SUM(t.rating_multiplier), 0)::int AS games
@@ -27,7 +41,7 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 		GROUP BY u.id, u.login, u.display_name, u.avatar_url, um.mmr
 		ORDER BY mmr DESC, wins DESC`
 
-	rows, err := s.Pool.Query(ctx, q, seasonID)
+	rows, err := s.Pool.Query(ctx, q, seasonID, s.seasonStart(ctx, seasonID))
 	if err != nil {
 		return nil, err
 	}
@@ -44,13 +58,17 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 	return out, rows.Err()
 }
 
-// TeamLeaderboard агрегирует сезонный рейтинг 2×2 по КОМАНДАМ (пара игроков = команда с одним
-// MMR, ключ — пара userId). MMR — сквозной по сезонам (team_mmr, старт 1000). wins/losses/games
-// учитывают жетон ×2 (матч = 2) и считаются по завершённым матчам (сезонный фильтр — по ним же).
-// Показываются только команды, сыгравшие хотя бы один завершённый матч (в сезоне, если задан).
+// TeamLeaderboard агрегирует рейтинг 2×2 по КОМАНДАМ (пара игроков = команда с одним MMR, ключ -
+// пара userId). MMR - внутри сезона, как у игроков. wins/losses/games учитывают жетон ×2 (матч = 2)
+// и считаются по завершённым матчам (сезонный фильтр - по ним же). Показываются только команды,
+// сыгравшие хотя бы один завершённый матч (в сезоне, если задан).
 func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.TeamLeaderboardRow, error) {
 	const q = `
-		SELECT tm.team_key, tm.name, tm.mmr,
+		SELECT tm.team_key, tm.name,
+		       (CASE WHEN $1 = '' THEN tm.mmr
+		             ELSE $2::int + COALESCE((SELECT SUM(h2.delta) FROM team_mmr_history h2
+		                  WHERE h2.team_key = tm.team_key AND h2.season_key = $1), 0)
+		        END)::int AS mmr,
 		       COALESCE(SUM(CASE WHEN h.delta > 0 THEN t.rating_multiplier ELSE 0 END), 0)::int AS wins,
 		       COALESCE(SUM(CASE WHEN h.delta < 0 THEN t.rating_multiplier ELSE 0 END), 0)::int AS losses,
 		       ua.id, ua.login, ua.display_name, ua.avatar_url,
@@ -63,9 +81,9 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 		JOIN users ub ON ub.id = tm.member_b
 		GROUP BY tm.team_key, tm.name, tm.mmr, ua.id, ua.login, ua.display_name, ua.avatar_url,
 		         ub.id, ub.login, ub.display_name, ub.avatar_url
-		ORDER BY tm.mmr DESC, wins DESC`
+		ORDER BY mmr DESC, wins DESC`
 
-	rows, err := s.Pool.Query(ctx, q, seasonID)
+	rows, err := s.Pool.Query(ctx, q, seasonID, s.seasonStart(ctx, seasonID))
 	if err != nil {
 		return nil, err
 	}

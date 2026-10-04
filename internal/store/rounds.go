@@ -11,15 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+const roundCols = `id, tournament_id, number, map, status, COALESCE(map_code, '')`
+
 func scanRound(row pgx.Row) (models.Round, error) {
 	var r models.Round
-	err := row.Scan(&r.ID, &r.TournamentID, &r.Number, &r.Map, &r.Status)
+	err := row.Scan(&r.ID, &r.TournamentID, &r.Number, &r.Map, &r.Status, &r.MapCode)
 	return r, err
 }
 
 func (s *Store) ListRounds(ctx context.Context, tournamentID string) ([]models.Round, error) {
 	rows, err := s.Pool.Query(ctx,
-		`SELECT id, tournament_id, number, map, status FROM rounds WHERE tournament_id = $1 ORDER BY number`,
+		`SELECT `+roundCols+` FROM rounds WHERE tournament_id = $1 ORDER BY number`,
 		tournamentID)
 	if err != nil {
 		return nil, err
@@ -43,7 +45,7 @@ func (s *Store) CreateRound(ctx context.Context, r models.Round) (models.Round, 
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (tournament_id, number) DO UPDATE
 			SET map = EXCLUDED.map, status = EXCLUDED.status
-		RETURNING id, tournament_id, number, map, status`
+		RETURNING ` + roundCols
 	if r.Status == "" {
 		r.Status = "pending"
 	}
@@ -53,7 +55,7 @@ func (s *Store) CreateRound(ctx context.Context, r models.Round) (models.Round, 
 // UpdateRound частично обновляет раунд (статус/карта/номер) по id. ErrNotFound — если нет,
 // ErrConflict — если номер раунда уже занят в этом турнире (UNIQUE tournament_id, number).
 func (s *Store) UpdateRound(ctx context.Context, id string, status, mapName *string, number *int) (models.Round, error) {
-	const cols = `id, tournament_id, number, map, status`
+	const cols = roundCols
 	sets := []string{}
 	args := []any{}
 	n := 1

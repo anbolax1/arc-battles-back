@@ -45,6 +45,7 @@ type User struct {
 }
 
 // Season — период рейтинга. Ровно один active одновременно; завершённый имеет ended_at.
+// MMR считается внутри сезона: все начинают со StartMmr, шаг Эло задаёт KFactor.
 type Season struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
@@ -52,6 +53,69 @@ type Season struct {
 	StartedAt time.Time  `json:"startedAt"`
 	EndedAt   *time.Time `json:"endedAt,omitempty"`
 	CreatedAt time.Time  `json:"createdAt"`
+	KFactor   int        `json:"kFactor"`
+	StartMmr  int        `json:"startMmr"`
+}
+
+// MapInfo - карта из справочника (пики-баны, задания на карту, превью).
+type MapInfo struct {
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	Image     string `json:"image"`
+	SortOrder int    `json:"sortOrder"`
+}
+
+// VetoAction - ход пиков-банов: бан/пик стороны или оставшаяся карта, ушедшая в раунд.
+type VetoAction struct {
+	Seq         int    `json:"seq"`
+	Action      string `json:"action"` // ban | pick | rest
+	Side        string `json:"side"`   // A | B; у оставшейся карты пусто
+	MapCode     string `json:"mapCode"`
+	MapName     string `json:"mapName"`
+	RoundNumber *int   `json:"roundNumber,omitempty"`
+}
+
+// MatchLogEntry - запись журнала матча (зачёт, ручные очки, легендарка).
+type MatchLogEntry struct {
+	ID            string    `json:"id"`
+	RoundNumber   int       `json:"roundNumber"`
+	ParticipantID *string   `json:"participantId,omitempty"`
+	Kind          string    `json:"kind"` // task | points | legendary
+	Text          string    `json:"text"`
+	Delta         int       `json:"delta"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+// RoundScore - очки стороны за раунд.
+type RoundScore struct {
+	RoundNumber   int    `json:"roundNumber"`
+	ParticipantID string `json:"participantId"`
+	Points        int    `json:"points"`
+}
+
+// MatchState - всё о матче одним ответом: шапка, пики-баны, задания, очки по раундам и журнал.
+type MatchState struct {
+	Tournament   Tournament            `json:"tournament"`
+	Stage        string                `json:"stage"` // veto | ready (карты выбраны) | round | finished
+	CurrentRound int                   `json:"currentRound"`
+	Veto         []VetoAction          `json:"veto"`
+	Tasks        []RoundBonusTask      `json:"tasks"`
+	Legendary    []LegendaryCompletion `json:"legendary"`
+	Scores       []RoundScore          `json:"scores"`
+	Manual       []RoundScore          `json:"manual"`
+	Log          []MatchLogEntry       `json:"log"`
+}
+
+// MatchPlayer - игрок для выбора стороны матча: MMR и счёт в текущем сезоне.
+type MatchPlayer struct {
+	ID            string `json:"id"`
+	Login         string `json:"login"`
+	DisplayName   string `json:"displayName"`
+	Mmr           int    `json:"mmr"`
+	Wins          int    `json:"wins"`
+	Losses        int    `json:"losses"`
+	IsNew         bool   `json:"isNew"` // в текущем сезоне ещё не играл
+	IsPlaceholder bool   `json:"isPlaceholder"`
 }
 
 type Tournament struct {
@@ -98,6 +162,7 @@ type Round struct {
 	TournamentID string `json:"tournamentId"`
 	Number       int    `json:"number"`
 	Map          string `json:"map"`
+	MapCode      string `json:"mapCode,omitempty"`
 	Status       string `json:"status"`
 }
 
@@ -330,10 +395,14 @@ type CatalogTask struct {
 	Text      string `json:"text"`
 	Points    int    `json:"points"`    // величина: баллы (fixed) или процент (percent)
 	ValueType string `json:"valueType"` // fixed | percent
-	Kind      string `json:"kind"`      // pve | pvp | mixed
+	Kind      string `json:"kind"`      // pve | pvp | pvpve
 	Source    string `json:"source"`    // official | boosty
 	Author    string `json:"author,omitempty"`
 	Title     string `json:"title,omitempty"`
+	Name      string `json:"name,omitempty"`    // название задания, например «Голыми руками»
+	Category  string `json:"category"`          // task | protocol
+	MapCode   string `json:"mapCode,omitempty"` // задание на карту; пусто - универсальное
+	Active    bool   `json:"active"`            // выключенные не раздаются, но остаются в истории
 }
 
 type CatalogComplication struct {
@@ -382,6 +451,18 @@ type LiveComplication struct {
 	ValueType string `json:"valueType"`         // fixed | percent
 	Times     int    `json:"times"`             // сколько раз нарушено (0 — не нарушено)
 	Minutes   int    `json:"minutes,omitempty"` // минуты штрафа (= times); присутствует в JSON, чтобы переживать round-trip
+	Reward    int    `json:"reward,omitempty"`  // протокол 3 сезона: награда за выполнение (+1); 0 - старый протокол-штраф
+	Done      bool   `json:"done,omitempty"`    // протокол 3 сезона выполнен
+}
+
+// LiveVeto - ход пиков-банов для оверлея.
+type LiveVeto struct {
+	MapCode  string `json:"mapCode"`
+	MapName  string `json:"mapName"`
+	Action   string `json:"action"` // ban | pick | rest
+	Side     string `json:"side,omitempty"`
+	SideName string `json:"sideName,omitempty"`
+	Round    int    `json:"round,omitempty"`
 }
 
 // LiveStanding — сторона матча в оверлее с СУММАРНЫМИ очками (по всем раундам).
@@ -400,6 +481,7 @@ type LiveBonus struct {
 	Times     int    `json:"times"`              // 0 — не зачтён, >0 — зачтён (для подсветки)
 	Who       string `json:"who,omitempty"`      // имя стороны-владельца контракта
 	Opponent  bool   `json:"opponent,omitempty"` // контракт противника фокусной стороны (для опции «показывать контракты противника»)
+	Category  string `json:"category,omitempty"` // task | map | protocol - вид задания 3 сезона
 }
 
 // LiveState — состояние оверлея, которым управляет организатор и которое стримится в OBS.
@@ -417,6 +499,9 @@ type LiveState struct {
 	Complication         *LiveComplication `json:"complication,omitempty"`
 	Standings            []LiveStanding    `json:"standings,omitempty"`
 	ShowStandings        bool              `json:"showStandings"`
+	CurrentMap           string            `json:"currentMap,omitempty"` // карта текущего раунда
+	Stage                string            `json:"stage,omitempty"`      // veto | ready | round | finished
+	Veto                 []LiveVeto        `json:"veto,omitempty"`       // ходы пиков-банов
 
 	// Богатые данные для модульных виджетов (Фаза 3). Заполняются «Эфиром»;
 	// пустые при дефолтном табло. Singular complication выше оставлен для совместимости.
@@ -524,7 +609,10 @@ type RoundBonusTask struct {
 	ValueType     string  `json:"valueType"`
 	Kind          string  `json:"kind"`                  // pve | pvp | pvpve
 	Times         int     `json:"times"`                 // legacy-счётчик (не используется в скоринге контрактов)
-	CompletedBy   *string `json:"completedBy,omitempty"` // кто выполнил: владелец → +2, противник → +1, nil → не выполнен
+	CompletedBy   *string `json:"completedBy,omitempty"` // кто выполнил: владелец - очки задания, противник - +1, nil - не выполнено
+	Name          string  `json:"name,omitempty"`
+	Category      string  `json:"category"`          // task | protocol
+	MapCode       string  `json:"mapCode,omitempty"` // задание на карту раунда
 }
 
 // CatalogLegendary — легендарный контракт (глобальный пул, 10 баллов, выполним один раз навсегда).
@@ -554,6 +642,10 @@ type LegendaryCompletion struct {
 	Map                 string    `json:"map,omitempty"`
 	CompletedAt         time.Time `json:"completedAt"`
 	TournamentTitle     string    `json:"tournamentTitle,omitempty"`
+	RoundID             *string   `json:"roundId,omitempty"`
+	RoundNumber         int       `json:"roundNumber,omitempty"`
+	LegendaryText       string    `json:"legendaryText,omitempty"`
+	Points              int       `json:"points,omitempty"`
 }
 
 // RoundPenalty — применённое усложнение участнику в раунде. Штраф = times × величина

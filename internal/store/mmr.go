@@ -3,20 +3,45 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"math"
 	"sort"
 
 	"github.com/battle-for-respect/backend/internal/models"
-	"github.com/jackc/pgx/v5"
 )
 
-// StartMmr — стартовый рейтинг каждого игрока и каждой команды.
-const StartMmr = 1000
+// StartMmr и legacyK - правила рейтинга для турниров без сезона.
+const (
+	StartMmr = 1000
+	legacyK  = 32
+)
 
-// kFactor — коэффициент Elo. Фиксированный K=32 (сверено с боевой таблицей организатора:
-// формула воспроизводит текущие MMR игроков/команд, см. сессию по внедрению).
-const kFactor = 32.0
+// seasonRule - правила рейтинга, по которым считается матч: сезон, K-фактор Эло и стартовый MMR.
+// Пустой Key - турнир без сезона.
+type seasonRule struct {
+	Key   string
+	K     int
+	Start int
+}
+
+func (s *Store) tournamentSeasonRule(ctx context.Context, tournamentID string) (seasonRule, error) {
+	var r seasonRule
+	err := s.Pool.QueryRow(ctx, `
+		SELECT COALESCE(t.season_id, ''), COALESCE(sn.k_factor, $2::int), COALESCE(sn.start_mmr, $3::int)
+		FROM tournaments t LEFT JOIN seasons sn ON sn.id = t.season_id
+		WHERE t.id = $1`, tournamentID, legacyK, StartMmr).Scan(&r.Key, &r.K, &r.Start)
+	return r, err
+}
+
+// activeSeasonRule - правила текущего сезона; без активного сезона - правила «вне сезона».
+func (s *Store) activeSeasonRule(ctx context.Context) seasonRule {
+	r := seasonRule{Key: "", K: legacyK, Start: StartMmr}
+	_ = s.Pool.QueryRow(ctx, `SELECT id, k_factor, start_mmr FROM seasons WHERE status = 'active' LIMIT 1`).
+		Scan(&r.Key, &r.K, &r.Start)
+	return r
+}
+
+// ActiveSeasonStart - стартовый MMR текущего сезона (с ним показываются ещё не игравшие).
+func (s *Store) ActiveSeasonStart(ctx context.Context) int { return s.activeSeasonRule(ctx).Start }
 
 // expectedScore — ожидаемый счёт игрока с рейтингом self против opp (классический Elo).
 func expectedScore(self, opp int) float64 {
@@ -28,14 +53,14 @@ func expectedScore(self, opp int) float64 {
 // применяется дважды, причём ВТОРОЙ раз считается от уже обновлённого рейтинга (компаундинг),
 // как в таблице (там ×2-матч записан двумя строками подряд). Округление каждого начисления —
 // к ближайшему целому (half away from zero, как math.Round).
-func eloWinMagnitude(winnerMmr, loserMmr, mult int) int {
+func eloWinMagnitude(winnerMmr, loserMmr, mult, k int) int {
 	if mult < 1 {
 		mult = 1
 	}
 	w, l := winnerMmr, loserMmr
 	total := 0
 	for i := 0; i < mult; i++ {
-		g := int(math.Round(kFactor * expectedScore(l, w))) // = K·(ожидаемый счёт проигравшего)
+		g := int(math.Round(float64(k) * expectedScore(l, w))) // = K·(ожидаемый счёт проигравшего)
 		total += g
 		w += g
 		l -= g
@@ -81,69 +106,103 @@ func teamKeyFromParticipant(p models.Participant) (key, memberA, memberB string,
 	return users[0] + "|" + users[1], users[0], users[1], true
 }
 
-// GetUserMmr возвращает текущий MMR пользователя в режиме (StartMmr, если записи ещё нет).
-func (s *Store) GetUserMmr(ctx context.Context, userID, mode string) (int, error) {
-	var mmr int
-	err := s.Pool.QueryRow(ctx, `SELECT mmr FROM user_mmr WHERE user_id=$1 AND mode=$2`, userID, mode).Scan(&mmr)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return StartMmr, nil
-	}
-	return mmr, err
+// userSeasonMmr - MMR игрока в сезоне: стартовый MMR сезона плюс изменения за его матчи.
+func (s *Store) userSeasonMmr(ctx context.Context, userID, mode string, rule seasonRule) (int, error) {
+	var sum int
+	err := s.Pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(delta), 0) FROM mmr_history WHERE user_id = $1 AND mode = $2 AND season_key = $3`,
+		userID, mode, rule.Key).Scan(&sum)
+	return rule.Start + sum, err
 }
 
-// BestTeamMmr — лучший (максимальный) MMR среди команд 2×2, где состоит игрок
-// (StartMmr, если игрок ещё не сыграл ни одного 2×2). Для профиля.
+// GetUserMmr возвращает MMR пользователя в текущем сезоне.
+func (s *Store) GetUserMmr(ctx context.Context, userID, mode string) (int, error) {
+	return s.userSeasonMmr(ctx, userID, mode, s.activeSeasonRule(ctx))
+}
+
+// BestTeamMmr - лучший MMR в текущем сезоне среди команд 2×2, где состоит игрок
+// (старт сезона, если команд нет). Для профиля.
 func (s *Store) BestTeamMmr(ctx context.Context, userID string) (int, error) {
+	start := s.activeSeasonRule(ctx).Start
 	var mmr *int
 	err := s.Pool.QueryRow(ctx,
 		`SELECT MAX(mmr) FROM team_mmr WHERE member_a=$1 OR member_b=$1`, userID).Scan(&mmr)
 	if err != nil {
-		return StartMmr, err
+		return start, err
 	}
 	if mmr == nil {
-		return StartMmr, nil
+		return start, nil
 	}
 	return *mmr, nil
 }
 
-// recomputeUserMmr материализует кэш user_mmr из истории: mmr = StartMmr + SUM(delta).
+// recomputeUserMmr обновляет кэш user_mmr - MMR игрока в текущем сезоне. Строка есть только у
+// тех, кто в этом сезоне играл: по ним считается место в таблице.
 func (s *Store) recomputeUserMmr(ctx context.Context, userID, mode string) error {
-	var sum int
+	rule := s.activeSeasonRule(ctx)
+	var sum, n int
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT COALESCE(SUM(delta),0) FROM mmr_history WHERE user_id=$1 AND mode=$2`, userID, mode).Scan(&sum); err != nil {
+		`SELECT COALESCE(SUM(delta), 0), COUNT(*) FROM mmr_history WHERE user_id = $1 AND mode = $2 AND season_key = $3`,
+		userID, mode, rule.Key).Scan(&sum, &n); err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err := s.Pool.Exec(ctx, `DELETE FROM user_mmr WHERE user_id = $1 AND mode = $2`, userID, mode)
 		return err
 	}
 	_, err := s.Pool.Exec(ctx, `
 		INSERT INTO user_mmr (user_id, mode, mmr, updated_at) VALUES ($1,$2,$3, now())
 		ON CONFLICT (user_id, mode) DO UPDATE SET mmr=EXCLUDED.mmr, updated_at=now()`,
-		userID, mode, StartMmr+sum)
+		userID, mode, rule.Start+sum)
 	return err
 }
 
-// ensureTeam гарантирует наличие строки команды в team_mmr (со стартовым 1000) и возвращает её
-// текущий MMR. Ключ и состав — из teamKeyFromParticipant.
-func (s *Store) ensureTeam(ctx context.Context, key, memberA, memberB, name string) (int, error) {
-	if _, err := s.Pool.Exec(ctx, `
+// ensureTeam гарантирует строку команды в team_mmr (состав и название).
+func (s *Store) ensureTeam(ctx context.Context, key, memberA, memberB, name string) error {
+	_, err := s.Pool.Exec(ctx, `
 		INSERT INTO team_mmr (team_key, member_a, member_b, mmr, name)
 		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (team_key) DO UPDATE SET name = EXCLUDED.name WHERE EXCLUDED.name <> ''`,
-		key, memberA, memberB, StartMmr, name); err != nil {
-		return StartMmr, err
-	}
-	var mmr int
-	err := s.Pool.QueryRow(ctx, `SELECT mmr FROM team_mmr WHERE team_key=$1`, key).Scan(&mmr)
-	return mmr, err
+		key, memberA, memberB, StartMmr, name)
+	return err
 }
 
-// recomputeTeamMmr материализует кэш team_mmr из истории: mmr = StartMmr + SUM(delta).
-func (s *Store) recomputeTeamMmr(ctx context.Context, key string) error {
+// teamSeasonMmr - MMR команды в сезоне: стартовый MMR сезона плюс изменения за её матчи.
+func (s *Store) teamSeasonMmr(ctx context.Context, key string, rule seasonRule) (int, error) {
 	var sum int
-	if err := s.Pool.QueryRow(ctx,
-		`SELECT COALESCE(SUM(delta),0) FROM team_mmr_history WHERE team_key=$1`, key).Scan(&sum); err != nil {
+	err := s.Pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(delta), 0) FROM team_mmr_history WHERE team_key = $1 AND season_key = $2`,
+		key, rule.Key).Scan(&sum)
+	return rule.Start + sum, err
+}
+
+// recomputeTeamMmr обновляет кэш team_mmr.mmr - MMR команды в текущем сезоне.
+func (s *Store) recomputeTeamMmr(ctx context.Context, key string) error {
+	rule := s.activeSeasonRule(ctx)
+	mmr, err := s.teamSeasonMmr(ctx, key, rule)
+	if err != nil {
 		return err
 	}
-	_, err := s.Pool.Exec(ctx,
-		`UPDATE team_mmr SET mmr=$2, updated_at=now() WHERE team_key=$1`, key, StartMmr+sum)
+	_, err = s.Pool.Exec(ctx, `UPDATE team_mmr SET mmr=$2, updated_at=now() WHERE team_key=$1`, key, mmr)
+	return err
+}
+
+// RefreshMmrCaches пересобирает кэши MMR под текущий сезон (после смены сезона или его правил).
+func (s *Store) RefreshMmrCaches(ctx context.Context) error {
+	rule := s.activeSeasonRule(ctx)
+	if _, err := s.Pool.Exec(ctx, `DELETE FROM user_mmr`); err != nil {
+		return err
+	}
+	if _, err := s.Pool.Exec(ctx, `
+		INSERT INTO user_mmr (user_id, mode, mmr, updated_at)
+		SELECT user_id, mode, $2::int + SUM(delta), now() FROM mmr_history
+		WHERE season_key = $1 GROUP BY user_id, mode`, rule.Key, rule.Start); err != nil {
+		return err
+	}
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE team_mmr tm SET mmr = $2::int + COALESCE((
+			SELECT SUM(h.delta) FROM team_mmr_history h WHERE h.team_key = tm.team_key AND h.season_key = $1
+		), 0), updated_at = now()`, rule.Key, rule.Start)
 	return err
 }
 
@@ -183,31 +242,35 @@ func (s *Store) ApplyTournamentMmr(ctx context.Context, tournamentID string) err
 	if mult < 1 {
 		mult = 1
 	}
-	if t.Mode == "2x2" {
-		return s.applyTeamMatch(ctx, tournamentID, winner, loser, mult)
+	rule, err := s.tournamentSeasonRule(ctx, tournamentID)
+	if err != nil {
+		return err
 	}
-	return s.applyUserMatch(ctx, tournamentID, winner, loser, mult)
+	if t.Mode == "2x2" {
+		return s.applyTeamMatch(ctx, tournamentID, winner, loser, mult, rule)
+	}
+	return s.applyUserMatch(ctx, tournamentID, winner, loser, mult, rule)
 }
 
 // applyUserMatch — начисление 1×1 (рейтинг игроков).
-func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult int) error {
+func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult int, rule seasonRule) error {
 	if winner.UserID == nil || loser.UserID == nil || *winner.UserID == "" || *loser.UserID == "" {
 		return nil
 	}
 	wu, lu := *winner.UserID, *loser.UserID
-	rw, err := s.GetUserMmr(ctx, wu, "1x1")
+	rw, err := s.userSeasonMmr(ctx, wu, "1x1", rule)
 	if err != nil {
 		return err
 	}
-	rl, err := s.GetUserMmr(ctx, lu, "1x1")
+	rl, err := s.userSeasonMmr(ctx, lu, "1x1", rule)
 	if err != nil {
 		return err
 	}
-	mag := eloWinMagnitude(rw, rl, mult)
-	if err := s.insertUserMmrHistory(ctx, tournamentID, wu, "1x1", mag, rw); err != nil {
+	mag := eloWinMagnitude(rw, rl, mult, rule.K)
+	if err := s.insertUserMmrHistory(ctx, tournamentID, wu, "1x1", mag, rw, rule.Key); err != nil {
 		return err
 	}
-	if err := s.insertUserMmrHistory(ctx, tournamentID, lu, "1x1", -mag, rl); err != nil {
+	if err := s.insertUserMmrHistory(ctx, tournamentID, lu, "1x1", -mag, rl, rule.Key); err != nil {
 		return err
 	}
 	if err := s.recomputeUserMmr(ctx, wu, "1x1"); err != nil {
@@ -216,35 +279,42 @@ func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner,
 	return s.recomputeUserMmr(ctx, lu, "1x1")
 }
 
-func (s *Store) insertUserMmrHistory(ctx context.Context, tournamentID, userID, mode string, delta, before int) error {
+// История датируется временем матча - по ней строятся график и лента матчей.
+func (s *Store) insertUserMmrHistory(ctx context.Context, tournamentID, userID, mode string, delta, before int, seasonKey string) error {
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO mmr_history (user_id, mode, tournament_id, delta, mmr_before, mmr_after)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO mmr_history (user_id, mode, tournament_id, delta, mmr_before, mmr_after, season_key, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7, (SELECT COALESCE(starts_at, created_at) FROM tournaments WHERE id = $3))
 		ON CONFLICT (tournament_id, user_id, mode) DO NOTHING`,
-		userID, mode, tournamentID, delta, before, before+delta)
+		userID, mode, tournamentID, delta, before, before+delta, seasonKey)
 	return err
 }
 
 // applyTeamMatch — начисление 2×2 (рейтинг КОМАНД). Неполные составы не рейтингуются.
-func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult int) error {
+func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult int, rule seasonRule) error {
 	wk, wa, wb, ok1 := teamKeyFromParticipant(winner)
 	lk, la, lb, ok2 := teamKeyFromParticipant(loser)
 	if !ok1 || !ok2 || wk == lk {
 		return nil
 	}
-	rw, err := s.ensureTeam(ctx, wk, wa, wb, winner.Name)
+	if err := s.ensureTeam(ctx, wk, wa, wb, winner.Name); err != nil {
+		return err
+	}
+	if err := s.ensureTeam(ctx, lk, la, lb, loser.Name); err != nil {
+		return err
+	}
+	rw, err := s.teamSeasonMmr(ctx, wk, rule)
 	if err != nil {
 		return err
 	}
-	rl, err := s.ensureTeam(ctx, lk, la, lb, loser.Name)
+	rl, err := s.teamSeasonMmr(ctx, lk, rule)
 	if err != nil {
 		return err
 	}
-	mag := eloWinMagnitude(rw, rl, mult)
-	if err := s.insertTeamMmrHistory(ctx, tournamentID, wk, mag, rw); err != nil {
+	mag := eloWinMagnitude(rw, rl, mult, rule.K)
+	if err := s.insertTeamMmrHistory(ctx, tournamentID, wk, mag, rw, rule.Key); err != nil {
 		return err
 	}
-	if err := s.insertTeamMmrHistory(ctx, tournamentID, lk, -mag, rl); err != nil {
+	if err := s.insertTeamMmrHistory(ctx, tournamentID, lk, -mag, rl, rule.Key); err != nil {
 		return err
 	}
 	if err := s.recomputeTeamMmr(ctx, wk); err != nil {
@@ -253,12 +323,12 @@ func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner,
 	return s.recomputeTeamMmr(ctx, lk)
 }
 
-func (s *Store) insertTeamMmrHistory(ctx context.Context, tournamentID, key string, delta, before int) error {
+func (s *Store) insertTeamMmrHistory(ctx context.Context, tournamentID, key string, delta, before int, seasonKey string) error {
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO team_mmr_history (team_key, tournament_id, delta, mmr_before, mmr_after)
-		VALUES ($1,$2,$3,$4,$5)
+		INSERT INTO team_mmr_history (team_key, tournament_id, delta, mmr_before, mmr_after, season_key, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6, (SELECT COALESCE(starts_at, created_at) FROM tournaments WHERE id = $2))
 		ON CONFLICT (tournament_id, team_key) DO NOTHING`,
-		key, tournamentID, delta, before, before+delta)
+		key, tournamentID, delta, before, before+delta, seasonKey)
 	return err
 }
 
@@ -354,7 +424,7 @@ func (s *Store) PopulateTournamentMmrChanges(ctx context.Context, t *models.Tour
 }
 
 // RecomputeAllMmr полностью пересчитывает MMR (игроков и команд) с нуля по ВСЕМ завершённым
-// турнирам в хронологическом порядке — для синка, где меняется состав завершённых матчей.
+// турнирам в хронологическом порядке: каждый матч - по правилам своего сезона.
 func (s *Store) RecomputeAllMmr(ctx context.Context) error {
 	for _, q := range []string{`TRUNCATE mmr_history`, `TRUNCATE team_mmr_history`, `DELETE FROM user_mmr`, `DELETE FROM team_mmr`} {
 		if _, err := s.Pool.Exec(ctx, q); err != nil {
@@ -384,5 +454,17 @@ func (s *Store) RecomputeAllMmr(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.RefreshMmrCaches(ctx)
+}
+
+// RunPendingRecompute пересчитывает MMR, если миграция поставила флаг (сменились правила подсчёта).
+func (s *Store) RunPendingRecompute(ctx context.Context) (bool, error) {
+	ct, err := s.Pool.Exec(ctx, `DELETE FROM app_flags WHERE key = 'recompute_mmr'`)
+	if err != nil {
+		return false, err
+	}
+	if ct.RowsAffected() == 0 {
+		return false, nil
+	}
+	return true, s.RecomputeAllMmr(ctx)
 }

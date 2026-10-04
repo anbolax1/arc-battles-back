@@ -35,6 +35,13 @@ func TestMMRIntegration(t *testing.T) {
 	st := store.New(pool)
 
 	uniq := time.Now().UnixNano()
+	// Отдельный сезон с K=32: ожидаемые числа ниже посчитаны по формуле 2 сезона.
+	if _, err := st.StartNewSeason(ctx, fmt.Sprintf("it-%d", uniq), 32, 1000); err != nil {
+		t.Fatalf("StartNewSeason: %v", err)
+	}
+	if err := st.RefreshMmrCaches(ctx); err != nil {
+		t.Fatalf("RefreshMmrCaches: %v", err)
+	}
 	mkUser := func(tag string) models.User {
 		login := fmt.Sprintf("it_%d_%s", uniq, tag)
 		u, err := st.CreateUser(ctx, login, login, "x", models.RoleUser)

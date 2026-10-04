@@ -2,9 +2,8 @@ package store
 
 import "testing"
 
-// Сверка формулы Elo K=32 с боевой таблицей организатора (воспроизведённой симуляцией):
-// равные рейтинги → ±16; матч 1047 vs 954 → +12; тот же матч по жетону ×2 → +23 (12, затем 11
-// от уже обновлённого рейтинга — компаундинг).
+// Сверка формулы Elo K=32 с таблицей 2 сезона: равные рейтинги → ±16; матч 1047 vs 954 → +12;
+// тот же матч по жетону ×2 → +23 (12, затем 11 от уже обновлённого рейтинга).
 func TestEloWinMagnitude(t *testing.T) {
 	cases := []struct {
 		winner, loser, mult, want int
@@ -16,15 +15,33 @@ func TestEloWinMagnitude(t *testing.T) {
 		{954, 1047, 1, 20}, // андердог выигрывает: больше очков
 	}
 	for _, c := range cases {
-		if got := eloWinMagnitude(c.winner, c.loser, c.mult); got != c.want {
+		if got := eloWinMagnitude(c.winner, c.loser, c.mult, 32); got != c.want {
 			t.Errorf("eloWinMagnitude(%d,%d,mult=%d) = %d, want %d", c.winner, c.loser, c.mult, got, c.want)
+		}
+	}
+}
+
+// Правила 3 сезона: K=100. Равные рейтинги → ±50; 1000 против 1054 → +58 (в таблице SURPRISE011
+// стал 1058, обыграв MADARA_SB с его 1054); ×2 - дважды подряд от обновлённого рейтинга.
+func TestEloWinMagnitudeSeason3(t *testing.T) {
+	cases := []struct {
+		winner, loser, mult, want int
+	}{
+		{1000, 1000, 1, 50},
+		{1000, 1054, 1, 58},
+		{1000, 1000, 2, 86}, // 50, затем 36 (1050 vs 950)
+		{1015, 1352, 1, 87},
+	}
+	for _, c := range cases {
+		if got := eloWinMagnitude(c.winner, c.loser, c.mult, 100); got != c.want {
+			t.Errorf("K=100 eloWinMagnitude(%d,%d,mult=%d) = %d, want %d", c.winner, c.loser, c.mult, got, c.want)
 		}
 	}
 }
 
 func TestEloZeroSumAndBounds(t *testing.T) {
 	// mult<1 нормализуется к 1.
-	if eloWinMagnitude(1000, 1000, 0) != 16 {
+	if eloWinMagnitude(1000, 1000, 0, 32) != 16 {
 		t.Errorf("mult=0 должен вести себя как mult=1")
 	}
 }

@@ -133,7 +133,7 @@ func (s *Store) Player1x1Opponents(ctx context.Context, userID string) ([]models
 	return out, rows.Err()
 }
 
-// Player1x1Place — место игрока в таблице 1×1 (0 — если ещё не играл 1×1).
+// Player1x1Place - место игрока в таблице 1×1 текущего сезона (0 - если в этом сезоне не играл).
 func (s *Store) Player1x1Place(ctx context.Context, userID string) (int, error) {
 	var myMmr *int
 	if err := s.Pool.QueryRow(ctx,
@@ -395,6 +395,10 @@ func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.Mm
 		return models.MmrStats{}, nil, nil, nil, err
 	}
 	stats := computeMmrStats(timeline)
+	// Лента - за все сезоны, а текущий MMR - в текущем сезоне (в начале сезона у всех стартовый).
+	if cur, err := s.GetUserMmr(ctx, userID, "1x1"); err == nil {
+		stats.CurrentMmr = cur
+	}
 	if place, err := s.Player1x1Place(ctx, userID); err == nil {
 		stats.Place = place
 	}

@@ -61,13 +61,9 @@ func (s *Store) ListRoundEntries(ctx context.Context, roundID string) ([]models.
 	return out, rows.Err()
 }
 
-// Очки за контракт: свой выполненный контракт даёт ContractOwnPoints, выполненный контракт
-// противника — ContractCrossPoints. Легендарный контракт — LegendaryPoints (если у записи нет
-// собственного points).
-const (
-	ContractOwnPoints   = 2
-	ContractCrossPoints = 1
-)
+// Своё выполненное задание приносит очки из каталога (задание - 2, протокол - 1), выполненное
+// задание противника - ContractCrossPoints.
+const ContractCrossPoints = 1
 
 // PointsBreakdown — разложение очков участника по источникам (единый источник формулы для
 // пересчёта total_points и для статистики профиля). Новая концепция: протоколы НЕ влияют на
@@ -75,7 +71,7 @@ const (
 type PointsBreakdown struct {
 	Base      int // ручная корректировка раунда (round_entries.points)
 	Main      int // основные задания раунда (per-side): SUM(times × points)
-	Contracts int // контракты: 2 × свои выполненные + 1 × чужие выполненные
+	Contracts int // задания и протоколы: очки своих выполненных + 1 × чужие выполненные
 	Legendary int // легендарные контракты: SUM(points) выполненных участником
 }
 
@@ -86,7 +82,7 @@ func (b PointsBreakdown) Total() int { return b.Base + b.Main + b.Contracts + b.
 //
 //	base      = SUM(round_entries.points)                              -- ручная корректировка
 //	main      = SUM(rstd.times × starter_task.points)                  -- основные задания (своя сторона)
-//	contracts = SUM(2 за свой выполненный + 1 за выполненный контракт противника)
+//	contracts = SUM(очки своего выполненного задания + 1 за выполненное задание противника)
 //	legendary = SUM(points выполненных легендарных контрактов)
 func (s *Store) participantBreakdown(ctx context.Context, participantID string) (PointsBreakdown, error) {
 	var b PointsBreakdown
@@ -104,12 +100,13 @@ func (s *Store) participantBreakdown(ctx context.Context, participantID string) 
 		WHERE rstd.participant_id = $1`, participantID).Scan(&b.Main); err != nil {
 		return b, err
 	}
-	// Контракты: свой выполненный = 2, выполненный контракт противника = 1.
-	// Касты $2::int/$3::int обязательны: без них Postgres трактует параметры как text → SUM(text) падает.
+	// Задания: своё выполненное - очки из каталога, выполненное задание противника - 1.
+	// Приведение $2::int обязательно: без него Postgres считает параметр текстом и SUM падает.
 	if err := s.Pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(CASE WHEN participant_id = $1 THEN $2::int ELSE $3::int END), 0)
-		FROM round_bonus_tasks
-		WHERE completed_by = $1`, participantID, ContractOwnPoints, ContractCrossPoints).Scan(&b.Contracts); err != nil {
+		SELECT COALESCE(SUM(CASE WHEN rbt.participant_id = $1 THEN ct.points ELSE $2::int END), 0)
+		FROM round_bonus_tasks rbt
+		JOIN catalog_tasks ct ON ct.id = rbt.task_id
+		WHERE rbt.completed_by = $1`, participantID, ContractCrossPoints).Scan(&b.Contracts); err != nil {
 		return b, err
 	}
 	// Легендарные контракты, выполненные этим участником.
