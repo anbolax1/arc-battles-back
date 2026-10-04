@@ -29,22 +29,49 @@ func (s *Store) ListMaps(ctx context.Context) ([]models.MapInfo, error) {
 	return out, rows.Err()
 }
 
-// vetoStep - ход пиков-банов: кто ходит и что делает.
-type vetoStep struct {
-	Action string // ban | pick | rest
-	Side   string // A | B; у оставшейся карты пусто
-	Round  int    // раунд, в который уходит карта (у банов 0)
+// Форматы матча: обычный матч 3 сезона и шоу-матч, объявленный заранее.
+const (
+	FormatMatch = "match"
+	FormatShow  = "show"
+)
+
+// vetoOrders - порядок пиков-банов по формату. Матч: бан A, бан B, пик A (1-й раунд), бан B, бан A,
+// оставшаяся карта - 2-й раунд. Шоу-матч: пик A, пик B, бан A, бан B, пик A - три раунда.
+var vetoOrders = map[string][]models.VetoStep{
+	FormatMatch: {
+		{Action: "ban", Side: "A"},
+		{Action: "ban", Side: "B"},
+		{Action: "pick", Side: "A", Round: 1},
+		{Action: "ban", Side: "B"},
+		{Action: "ban", Side: "A"},
+		{Action: "rest", Round: 2},
+	},
+	FormatShow: {
+		{Action: "pick", Side: "A", Round: 1},
+		{Action: "pick", Side: "B", Round: 2},
+		{Action: "ban", Side: "A"},
+		{Action: "ban", Side: "B"},
+		{Action: "pick", Side: "A", Round: 3},
+	},
 }
 
-// vetoOrder - порядок по правилам 3 сезона: бан A, бан B, пик A (1-й раунд), бан B, бан A,
-// оставшаяся карта - 2-й раунд. A - сторона с меньшим MMR или новичок сезона.
-var vetoOrder = []vetoStep{
-	{"ban", "A", 0},
-	{"ban", "B", 0},
-	{"pick", "A", 1},
-	{"ban", "B", 0},
-	{"ban", "A", 0},
-	{"rest", "", 2},
+// VetoOrder - порядок пиков-банов для формата матча. A - сторона с меньшим MMR или новичок сезона.
+func VetoOrder(format string) []models.VetoStep {
+	if order, ok := vetoOrders[format]; ok {
+		return order
+	}
+	return vetoOrders[FormatMatch]
+}
+
+// FormatRounds - сколько раундов в матче этого формата.
+func FormatRounds(format string) int {
+	n := 0
+	for _, st := range VetoOrder(format) {
+		if st.Round > n {
+			n = st.Round
+		}
+	}
+	return n
 }
 
 // ListVeto - ходы пиков-банов матча по порядку.
@@ -87,7 +114,7 @@ func setRoundMap(ctx context.Context, tx pgx.Tx, tournamentID string, number int
 	return err
 }
 
-func insertVeto(ctx context.Context, tx pgx.Tx, tournamentID string, seq int, st vetoStep, mapCode string) error {
+func insertVeto(ctx context.Context, tx pgx.Tx, tournamentID string, seq int, st models.VetoStep, mapCode string) error {
 	var round *int
 	if st.Round > 0 {
 		r := st.Round
@@ -99,8 +126,8 @@ func insertVeto(ctx context.Context, tx pgx.Tx, tournamentID string, seq int, st
 	return err
 }
 
-// VetoMap делает следующий ход пиков-банов картой mapCode. Когда остаётся одна карта, она сама
-// уходит во 2-й раунд.
+// VetoMap делает следующий ход пиков-банов картой mapCode. Если по порядку дальше идёт оставшаяся
+// карта и она одна, она сама уходит в свой раунд.
 func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -113,6 +140,14 @@ func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error
 	} else if started {
 		return ErrMatchStarted
 	}
+	var format string
+	if err := tx.QueryRow(ctx, `SELECT format FROM tournaments WHERE id = $1`, tournamentID).Scan(&format); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	order := VetoOrder(format)
 	var done int
 	var used bool
 	if err := tx.QueryRow(ctx, `
@@ -127,10 +162,10 @@ func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error
 	if !exists {
 		return ErrNotFound
 	}
-	if used || done >= len(vetoOrder) {
+	if used || done >= len(order) {
 		return ErrConflict
 	}
-	step := vetoOrder[done]
+	step := order[done]
 	if err := insertVeto(ctx, tx, tournamentID, done+1, step, mapCode); err != nil {
 		return err
 	}
@@ -141,8 +176,7 @@ func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error
 	}
 	done++
 
-	// Последний ход - оставшаяся карта: если она одна, ставим её сами.
-	if done == len(vetoOrder)-1 {
+	if done < len(order) && order[done].Action == "rest" {
 		rows, err := tx.Query(ctx, `
 			SELECT code FROM maps WHERE active
 			  AND code NOT IN (SELECT map_code FROM match_veto WHERE tournament_id = $1)`, tournamentID)
@@ -160,7 +194,7 @@ func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error
 		}
 		rows.Close()
 		if len(rest) == 1 {
-			last := vetoOrder[done]
+			last := order[done]
 			if err := insertVeto(ctx, tx, tournamentID, done+1, last, rest[0]); err != nil {
 				return err
 			}
@@ -218,7 +252,7 @@ func (s *Store) VetoUndo(ctx context.Context, tournamentID string) error {
 	return tx.Commit(ctx)
 }
 
-// SetMatchMaps задаёт карты раундов вручную, без пиков-банов (шоуматч): codes[i] - карта (i+1)-го раунда.
+// SetMatchMaps задаёт карты раундов вручную, если пики-баны прошли вне эфира: codes[i] - карта (i+1)-го раунда.
 func (s *Store) SetMatchMaps(ctx context.Context, tournamentID string, codes []string) error {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {

@@ -102,6 +102,7 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 		return st, err
 	}
 	st.Tournament = t
+	st.VetoOrder = VetoOrder(t.Format)
 	if st.Veto, err = s.ListVeto(ctx, tournamentID); err != nil {
 		return st, err
 	}
@@ -210,6 +211,8 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 		if st.CurrentRound == 0 && len(t.Rounds) > 0 {
 			st.CurrentRound = t.Rounds[len(t.Rounds)-1].Number
 		}
+	case t.Status == "upcoming":
+		st.Stage = "scheduled"
 	case st.Stage == "round":
 	case allMaps:
 		st.Stage = "ready"

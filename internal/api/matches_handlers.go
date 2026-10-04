@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/battle-for-respect/backend/internal/models"
@@ -48,15 +49,27 @@ func (s *Server) handleGetMatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// writeMatch отвечает свежим состоянием матча и обновляет оверлей.
+// writeMatch отвечает свежим состоянием матча и обновляет оверлей. Запланированный шоу-матч оверлей
+// не трогает: там остаётся текущий матч.
 func (s *Server) writeMatch(w http.ResponseWriter, r *http.Request, tournamentID string, status int) {
-	s.publishMatchOverlay(r.Context(), tournamentID)
 	st, err := s.Store.GetMatchState(r.Context(), tournamentID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "матч не найден")
 		return
 	}
+	if st.Stage != "scheduled" {
+		s.publishMatchState(r.Context(), st)
+	}
 	writeJSON(w, status, st)
+}
+
+// writeLiveConflict - другой матч уже в эфире: в ответе его id, чтобы пульт дал на него ссылку.
+func (s *Server) writeLiveConflict(w http.ResponseWriter, r *http.Request) {
+	cur, _ := s.Store.CurrentMatchID(r.Context())
+	writeJSON(w, http.StatusConflict, map[string]string{
+		"error":   "уже идёт другой матч — завершите или отмените его",
+		"matchId": cur,
+	})
 }
 
 // matchGuard не даёт править завершённый матч.
@@ -105,13 +118,14 @@ func (s *Server) handleCreatePlaceholder(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, status, u)
 }
 
-// POST /api/matches - новый матч; он сразу становится текущим.
+// POST /api/matches - новый матч; обычный сразу становится текущим, шоу-матч уходит в расписание.
 func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Mode             string `json:"mode"`
-		PlayerType       string `json:"playerType"`
-		RatingMultiplier int    `json:"ratingMultiplier"`
-		Rounds           int    `json:"rounds"`
+		Mode             string     `json:"mode"`
+		PlayerType       string     `json:"playerType"`
+		RatingMultiplier int        `json:"ratingMultiplier"`
+		Format           string     `json:"format"`
+		StartsAt         *time.Time `json:"startsAt"`
 		Sides            []struct {
 			UserID  string   `json:"userId"`
 			Members []string `json:"members"`
@@ -126,7 +140,13 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "нужны две стороны")
 		return
 	}
-	in := store.NewMatch{Mode: b.Mode, PlayerType: b.PlayerType, RatingMultiplier: b.RatingMultiplier, Rounds: b.Rounds}
+	if b.Format == store.FormatShow && b.StartsAt == nil {
+		writeError(w, http.StatusBadRequest, "укажите дату и время шоу-матча")
+		return
+	}
+	in := store.NewMatch{
+		Mode: b.Mode, PlayerType: b.PlayerType, RatingMultiplier: b.RatingMultiplier, Format: b.Format, StartsAt: b.StartsAt,
+	}
 	for i, sd := range b.Sides {
 		if b.Mode == "2x2" {
 			if len(sd.Members) != 2 {
@@ -141,11 +161,7 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.Store.CreateMatch(r.Context(), in)
 	if errors.Is(err, store.ErrLiveMatchExists) {
-		cur, _ := s.Store.CurrentMatchID(r.Context())
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error":   "уже идёт другой матч — завершите или отмените его",
-			"matchId": cur,
-		})
+		s.writeLiveConflict(w, r)
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
@@ -196,7 +212,7 @@ func (s *Server) handleVetoUndo(w http.ResponseWriter, r *http.Request) {
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
-// POST /api/tournaments/{id}/maps {maps: [code, ...]} - карты раундов без пиков-банов (шоуматч).
+// POST /api/tournaments/{id}/maps {maps: [code, ...]} - карты раундов вручную, если пики-баны прошли вне эфира.
 func (s *Server) handleSetMatchMaps(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !s.matchGuard(w, r, id) {
@@ -244,6 +260,47 @@ func (s *Server) handleNextRound(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeError(w, http.StatusInternalServerError, err.Error())
 		}
+		return
+	}
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
+// POST /api/tournaments/{id}/start - вывести запланированный шоу-матч в эфир: он становится текущим.
+func (s *Server) handleStartMatch(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !s.matchGuard(w, r, id) {
+		return
+	}
+	switch err := s.Store.StartShowMatch(r.Context(), id); {
+	case errors.Is(err, store.ErrLiveMatchExists):
+		s.writeLiveConflict(w, r)
+		return
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "матч уже начался")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
+// POST /api/tournaments/{id}/schedule {startsAt} - перенести шоу-матч, пока он не начался.
+func (s *Server) handleRescheduleMatch(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var b struct {
+		StartsAt *time.Time `json:"startsAt"`
+	}
+	if err := readJSON(r, &b); err != nil || b.StartsAt == nil {
+		writeError(w, http.StatusBadRequest, "укажите дату и время")
+		return
+	}
+	switch err := s.Store.RescheduleShowMatch(r.Context(), id, *b.StartsAt); {
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "перенести можно только матч, который ещё не начался")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.writeMatch(w, r, id, http.StatusOK)

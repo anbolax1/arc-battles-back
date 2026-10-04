@@ -15,6 +15,10 @@ func (s *Server) publishMatchOverlay(ctx context.Context, tournamentID string) {
 	if err != nil {
 		return
 	}
+	s.publishMatchState(ctx, st)
+}
+
+func (s *Server) publishMatchState(ctx context.Context, st models.MatchState) {
 	data, _ := s.Store.GetLiveState(ctx)
 	var stored models.LiveState
 	_ = json.Unmarshal(data, &stored)

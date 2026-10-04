@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/jackc/pgx/v5"
@@ -30,7 +31,8 @@ type NewMatch struct {
 	Mode             string
 	PlayerType       string
 	RatingMultiplier int
-	Rounds           int
+	Format           string     // match | show
+	StartsAt         *time.Time // когда начнётся шоу-матч
 	Sides            [2]MatchSide
 }
 
@@ -99,11 +101,20 @@ func userName(u models.User) string {
 	return u.Login
 }
 
-// CreateMatch заводит текущий матч: сторону A получает новичок сезона или тот, у кого меньше MMR -
-// она первой банит карту.
+// CreateMatch заводит матч: обычный сразу становится текущим, шоу-матч ждёт своего времени в расписании.
+// Сторону A получает новичок сезона или тот, у кого меньше MMR - она ходит первой в пиках-банах.
 func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament, error) {
-	if live, err := s.CurrentMatchID(ctx); err == nil && live != "" {
-		return models.Tournament{}, ErrLiveMatchExists
+	status, startsAt := "live", time.Now()
+	if in.Format == FormatShow {
+		status = "upcoming"
+		if in.StartsAt != nil {
+			startsAt = *in.StartsAt
+		}
+	} else {
+		in.Format = FormatMatch
+		if live, err := s.CurrentMatchID(ctx); err == nil && live != "" {
+			return models.Tournament{}, ErrLiveMatchExists
+		}
 	}
 	if in.Mode != "2x2" {
 		in.Mode = "1x1"
@@ -111,9 +122,7 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 	if in.RatingMultiplier != 2 {
 		in.RatingMultiplier = 1
 	}
-	if in.Rounds < 1 || in.Rounds > 3 {
-		in.Rounds = 2
-	}
+	rounds := FormatRounds(in.Format)
 	rule := s.activeSeasonRule(ctx)
 	a, err := s.describeSide(ctx, in.Mode, in.Sides[0], rule)
 	if err != nil {
@@ -138,13 +147,14 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 
 	var id string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, season_id)
-		VALUES ($1, $2, $3, 'live', $4, '[]', now(), $5, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1))
+		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, season_id, format)
+		VALUES ($1, $2, $3, $4, $5, '[]', $6, $7, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1), $8)
 		RETURNING id`,
-		a.part.Name+" vs "+b.part.Name, in.Mode, NormalizePlayerType(in.PlayerType), in.Rounds, in.RatingMultiplier).Scan(&id); err != nil {
+		a.part.Name+" vs "+b.part.Name, in.Mode, NormalizePlayerType(in.PlayerType), status, rounds, startsAt,
+		in.RatingMultiplier, in.Format).Scan(&id); err != nil {
 		return models.Tournament{}, err
 	}
-	for n := 1; n <= in.Rounds; n++ {
+	for n := 1; n <= rounds; n++ {
 		if _, err := tx.Exec(ctx, `INSERT INTO rounds (tournament_id, number, status) VALUES ($1, $2, 'pending')`, id, n); err != nil {
 			return models.Tournament{}, err
 		}
@@ -170,6 +180,38 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 		}
 	}
 	return s.GetTournament(ctx, id)
+}
+
+// StartShowMatch выводит запланированный шоу-матч в эфир: он становится текущим и попадает в сезон,
+// который идёт сейчас.
+func (s *Store) StartShowMatch(ctx context.Context, id string) error {
+	if live, err := s.CurrentMatchID(ctx); err == nil && live != "" && live != id {
+		return ErrLiveMatchExists
+	}
+	ct, err := s.Pool.Exec(ctx, `
+		UPDATE tournaments SET status = 'live', updated_at = now(),
+		       season_id = (SELECT id FROM seasons WHERE status = 'active' LIMIT 1)
+		WHERE id = $1 AND status = 'upcoming'`, id)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
+// RescheduleShowMatch переносит шоу-матч, пока он не начался.
+func (s *Store) RescheduleShowMatch(ctx context.Context, id string, at time.Time) error {
+	ct, err := s.Pool.Exec(ctx,
+		`UPDATE tournaments SET starts_at = $2, updated_at = now() WHERE id = $1 AND status = 'upcoming'`, id, at)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrConflict
+	}
+	return nil
 }
 
 // CurrentMatchID - матч, который сейчас идёт (пусто, если такого нет).

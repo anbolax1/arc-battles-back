@@ -75,6 +75,13 @@ type VetoAction struct {
 	RoundNumber *int   `json:"roundNumber,omitempty"`
 }
 
+// VetoStep - ход в порядке пиков-банов: кто ходит, что делает и в какой раунд уходит карта.
+type VetoStep struct {
+	Action string `json:"action"` // ban | pick | rest
+	Side   string `json:"side"`   // A | B; у оставшейся карты пусто
+	Round  int    `json:"round,omitempty"`
+}
+
 // MatchLogEntry - запись журнала матча (зачёт, ручные очки, легендарка).
 type MatchLogEntry struct {
 	ID            string    `json:"id"`
@@ -96,9 +103,10 @@ type RoundScore struct {
 // MatchState - всё о матче одним ответом: шапка, пики-баны, задания, очки по раундам и журнал.
 type MatchState struct {
 	Tournament   Tournament            `json:"tournament"`
-	Stage        string                `json:"stage"` // veto | ready (карты выбраны) | round | finished
+	Stage        string                `json:"stage"` // scheduled | veto | ready (карты выбраны) | round | finished
 	CurrentRound int                   `json:"currentRound"`
 	Veto         []VetoAction          `json:"veto"`
+	VetoOrder    []VetoStep            `json:"vetoOrder"`
 	Tasks        []RoundBonusTask      `json:"tasks"`
 	Legendary    []LegendaryCompletion `json:"legendary"`
 	Scores       []RoundScore          `json:"scores"`
@@ -123,6 +131,7 @@ type Tournament struct {
 	Title               string           `json:"title"`
 	Mode                string           `json:"mode"`
 	PlayerType          string           `json:"playerType"` // pve | pvp | pvpve — тип игроков (пул основных заданий/контрактов)
+	Format              string           `json:"format"`     // match | show: шоу-матч объявляется заранее и идёт в расписание
 	Status              string           `json:"status"`
 	TotalRounds         int              `json:"totalRounds"`
 	RatingMultiplier    int              `json:"ratingMultiplier"` // жетон «×2 рейтинга»: 1 — обычный матч, 2 — считается за два (двойное Elo с компаундингом, W/L +2)
