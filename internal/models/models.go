@@ -162,7 +162,8 @@ type Tournament struct {
 	Format              string           `json:"format"`     // match | show: шоу-матч объявляется заранее и идёт в расписание
 	Status              string           `json:"status"`
 	TotalRounds         int              `json:"totalRounds"`
-	RatingMultiplier    int              `json:"ratingMultiplier"` // жетон «×2 рейтинга»: 1 — обычный матч, 2 — считается за два (двойное Elo с компаундингом, W/L +2)
+	RatingMultiplier    int              `json:"ratingMultiplier"` // жетон «×2 рейтинга»: 1 - обычный матч, 2 - удвоенное изменение MMR
+	Games               int              `json:"games"`            // сколько матчей засчитывает: 2 - ×2 прошлых сезонов (два матча подряд)
 	Maps                []string         `json:"maps"`
 	StartsAt            *time.Time       `json:"startsAt,omitempty"`
 	WinnerParticipantID *string          `json:"winnerParticipantId,omitempty"`
@@ -273,7 +274,10 @@ type MmrPoint struct {
 	Mmr          int        `json:"mmr"`   // MMR ПОСЛЕ матча
 	Delta        int        `json:"delta"` // изменение MMR (может быть двойным при жетоне ×2)
 	Win          bool       `json:"win"`
-	Mult         int        `json:"mult"` // множитель матча (2 = жетон ×2)
+	Mult         int        `json:"mult"`                 // множитель матча (2 = жетон ×2)
+	Games        int        `json:"games"`                // сколько матчей засчитывает (для побед и поражений)
+	Season       string     `json:"season"`               // id сезона; пусто - матч вне сезона
+	Correction   bool       `json:"correction,omitempty"` // не матч, а сверка рейтинга с официальными цифрами
 }
 
 // MmrStats — сводная статистика по исходам (игрок 1×1 или команда 2×2). wins/losses/games
@@ -344,6 +348,7 @@ type PlayerHistoryItem struct {
 	Name         string     `json:"name"` // имя участника/стороны игрока в том турнире
 	Points       int        `json:"points"`
 	Win          bool       `json:"win"`
+	MmrDelta     *int       `json:"mmrDelta,omitempty"` // изменение MMR игрока (или его команды) за матч
 }
 
 // PlayerStats — расширенная статистика игрока по завершённым турнирам:

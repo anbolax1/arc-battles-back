@@ -30,8 +30,8 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 		                  WHERE h.user_id = u.id AND h.mode = '1x1' AND h.season_key = $1), 0)
 		        END)::int AS mmr,
 		       COALESCE(SUM(p.total_points), 0)::int AS points,
-		       COALESCE(SUM(CASE WHEN t.winner_participant_id = p.id THEN t.rating_multiplier ELSE 0 END), 0)::int AS wins,
-		       COALESCE(SUM(t.rating_multiplier), 0)::int AS games
+		       COALESCE(SUM(CASE WHEN t.winner_participant_id = p.id THEN t.games ELSE 0 END), 0)::int AS wins,
+		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM participants p
 		JOIN tournaments t ON t.id = p.tournament_id AND t.mode = '1x1' AND t.status = 'finished'
 		   AND ($1 = '' OR t.season_id = $1)
@@ -69,8 +69,8 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 		             ELSE $2::int + COALESCE((SELECT SUM(h2.delta) FROM team_mmr_history h2
 		                  WHERE h2.team_key = tm.team_key AND h2.season_key = $1), 0)
 		        END)::int AS mmr,
-		       COALESCE(SUM(CASE WHEN h.delta > 0 THEN t.rating_multiplier ELSE 0 END), 0)::int AS wins,
-		       COALESCE(SUM(CASE WHEN h.delta < 0 THEN t.rating_multiplier ELSE 0 END), 0)::int AS losses,
+		       COALESCE(SUM(CASE WHEN h.delta > 0 THEN t.games ELSE 0 END), 0)::int AS wins,
+		       COALESCE(SUM(CASE WHEN h.delta < 0 THEN t.games ELSE 0 END), 0)::int AS losses,
 		       ua.id, ua.login, ua.display_name, ua.avatar_url,
 		       ub.id, ub.login, ub.display_name, ub.avatar_url
 		FROM team_mmr tm

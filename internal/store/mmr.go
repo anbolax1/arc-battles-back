@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
 )
@@ -48,19 +49,22 @@ func expectedScore(self, opp int) float64 {
 	return 1.0 / (1.0 + math.Pow(10, float64(opp-self)/400.0))
 }
 
-// eloWinMagnitude — насколько меняется рейтинг по итогу матча «победитель vs проигравший»
-// (победитель +N, проигравший −N — zero-sum). mult — жетон «×2 рейтинга»: при mult=2 Elo
-// применяется дважды, причём ВТОРОЙ раз считается от уже обновлённого рейтинга (компаундинг),
-// как в таблице (там ×2-матч записан двумя строками подряд). Округление каждого начисления —
-// к ближайшему целому (half away from zero, как math.Round).
-func eloWinMagnitude(winnerMmr, loserMmr, mult, k int) int {
-	if mult < 1 {
-		mult = 1
+// eloWinMagnitude - насколько меняется рейтинг по итогу матча (победитель +N, проигравший -N).
+// Матч, засчитанный за несколько (games: ×2 прошлых сезонов и таблицы), - несколько начислений
+// подряд, каждое от обновлённого рейтинга; иначе жетон ×2 (mult) просто удваивает начисление.
+// Каждое начисление округляется к ближайшему целому.
+func eloWinMagnitude(winnerMmr, loserMmr, mult, games, k int) int {
+	if games < 1 {
+		games = 1
+	}
+	per := mult / games
+	if per < 1 {
+		per = 1
 	}
 	w, l := winnerMmr, loserMmr
 	total := 0
-	for i := 0; i < mult; i++ {
-		g := int(math.Round(float64(k) * expectedScore(l, w))) // = K·(ожидаемый счёт проигравшего)
+	for i := 0; i < games; i++ {
+		g := int(math.Round(float64(k)*expectedScore(l, w))) * per // = K·(ожидаемый счёт проигравшего)
 		total += g
 		w += g
 		l -= g
@@ -142,7 +146,7 @@ func (s *Store) recomputeUserMmr(ctx context.Context, userID, mode string) error
 	rule := s.activeSeasonRule(ctx)
 	var sum, n int
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT COALESCE(SUM(delta), 0), COUNT(*) FROM mmr_history WHERE user_id = $1 AND mode = $2 AND season_key = $3`,
+		`SELECT COALESCE(SUM(delta), 0), COUNT(tournament_id) FROM mmr_history WHERE user_id = $1 AND mode = $2 AND season_key = $3`,
 		userID, mode, rule.Key).Scan(&sum, &n); err != nil {
 		return err
 	}
@@ -196,7 +200,7 @@ func (s *Store) RefreshMmrCaches(ctx context.Context) error {
 	if _, err := s.Pool.Exec(ctx, `
 		INSERT INTO user_mmr (user_id, mode, mmr, updated_at)
 		SELECT user_id, mode, $2::int + SUM(delta), now() FROM mmr_history
-		WHERE season_key = $1 GROUP BY user_id, mode`, rule.Key, rule.Start); err != nil {
+		WHERE season_key = $1 GROUP BY user_id, mode HAVING COUNT(tournament_id) > 0`, rule.Key, rule.Start); err != nil {
 		return err
 	}
 	if _, err := s.Pool.Exec(ctx, `
@@ -213,7 +217,7 @@ func (s *Store) RefreshMmrCaches(ctx context.Context) error {
 // ровно две стороны). Идемпотентно: сначала откатывает прежние начисления этого турнира, затем
 // начисляет заново (выдерживает повторный finished и смену победителя). Без победителя или если
 // сторон не ровно две — MMR не двигается. 1×1 — рейтинг игроков (user_mmr); 2×2 — рейтинг КОМАНД
-// (team_mmr по паре userId). Жетон «×2 рейтинга» (rating_multiplier=2) применяет Elo дважды.
+// (team_mmr по паре userId). Как считается жетон ×2 - см. eloWinMagnitude.
 func (s *Store) ApplyTournamentMmr(ctx context.Context, tournamentID string) error {
 	t, err := s.GetTournament(ctx, tournamentID)
 	if err != nil {
@@ -250,13 +254,13 @@ func (s *Store) ApplyTournamentMmr(ctx context.Context, tournamentID string) err
 		return err
 	}
 	if t.Mode == "2x2" {
-		return s.applyTeamMatch(ctx, tournamentID, winner, loser, mult, rule)
+		return s.applyTeamMatch(ctx, tournamentID, winner, loser, mult, t.Games, rule)
 	}
-	return s.applyUserMatch(ctx, tournamentID, winner, loser, mult, rule)
+	return s.applyUserMatch(ctx, tournamentID, winner, loser, mult, t.Games, rule)
 }
 
 // applyUserMatch — начисление 1×1 (рейтинг игроков).
-func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult int, rule seasonRule) error {
+func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult, games int, rule seasonRule) error {
 	if winner.UserID == nil || loser.UserID == nil || *winner.UserID == "" || *loser.UserID == "" {
 		return nil
 	}
@@ -269,11 +273,22 @@ func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner,
 	if err != nil {
 		return err
 	}
-	mag := eloWinMagnitude(rw, rl, mult, rule.K)
-	if err := s.insertUserMmrHistory(ctx, tournamentID, wu, "1x1", mag, rw, rule.Key); err != nil {
+	mag := eloWinMagnitude(rw, rl, mult, games, rule.K)
+	winDelta, loseDelta := mag, -mag
+	// Матч перенесён из внешнего источника: его изменения MMR берутся как есть.
+	var pinW, pinL *int
+	if err := s.Pool.QueryRow(ctx, `
+		SELECT (SELECT mmr_delta FROM participants WHERE id = $1), (SELECT mmr_delta FROM participants WHERE id = $2)`,
+		winner.ID, loser.ID).Scan(&pinW, &pinL); err != nil {
 		return err
 	}
-	if err := s.insertUserMmrHistory(ctx, tournamentID, lu, "1x1", -mag, rl, rule.Key); err != nil {
+	if pinW != nil && pinL != nil {
+		winDelta, loseDelta = *pinW, *pinL
+	}
+	if err := s.insertUserMmrHistory(ctx, tournamentID, wu, "1x1", winDelta, rw, rule.Key); err != nil {
+		return err
+	}
+	if err := s.insertUserMmrHistory(ctx, tournamentID, lu, "1x1", loseDelta, rl, rule.Key); err != nil {
 		return err
 	}
 	if err := s.recomputeUserMmr(ctx, wu, "1x1"); err != nil {
@@ -293,7 +308,7 @@ func (s *Store) insertUserMmrHistory(ctx context.Context, tournamentID, userID, 
 }
 
 // applyTeamMatch — начисление 2×2 (рейтинг КОМАНД). Неполные составы не рейтингуются.
-func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult int, rule seasonRule) error {
+func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult, games int, rule seasonRule) error {
 	wk, wa, wb, ok1 := teamKeyFromParticipant(winner)
 	lk, la, lb, ok2 := teamKeyFromParticipant(loser)
 	if !ok1 || !ok2 || wk == lk {
@@ -313,7 +328,7 @@ func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner,
 	if err != nil {
 		return err
 	}
-	mag := eloWinMagnitude(rw, rl, mult, rule.K)
+	mag := eloWinMagnitude(rw, rl, mult, games, rule.K)
 	if err := s.insertTeamMmrHistory(ctx, tournamentID, wk, mag, rw, rule.Key); err != nil {
 		return err
 	}
@@ -426,34 +441,99 @@ func (s *Store) PopulateTournamentMmrChanges(ctx context.Context, t *models.Tour
 	}
 }
 
+// MmrCorrection - сверка рейтинга игрока с официальными цифрами на дату.
+type MmrCorrection struct {
+	UserID   string
+	SeasonID string
+	Delta    int
+	At       time.Time
+	Note     string
+}
+
+// ReplaceMmrCorrections заменяет сверки из одного источника: повторный импорт не копит их.
+func (s *Store) ReplaceMmrCorrections(ctx context.Context, source string, items []MmrCorrection) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM mmr_corrections WHERE source = $1`, source); err != nil {
+		return err
+	}
+	for _, c := range items {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO mmr_corrections (user_id, season_id, delta, at, source, note)
+			VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6)`, c.UserID, c.SeasonID, c.Delta, c.At, source, c.Note); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) applyCorrection(ctx context.Context, userID, seasonID string, delta int, at time.Time) error {
+	rule := seasonRule{Key: "", K: legacyK, Start: StartMmr}
+	if seasonID != "" {
+		if err := s.Pool.QueryRow(ctx, `SELECT id, k_factor, start_mmr FROM seasons WHERE id = $1`, seasonID).
+			Scan(&rule.Key, &rule.K, &rule.Start); err != nil {
+			return err
+		}
+	}
+	before, err := s.userSeasonMmr(ctx, userID, "1x1", rule)
+	if err != nil {
+		return err
+	}
+	_, err = s.Pool.Exec(ctx, `
+		INSERT INTO mmr_history (user_id, mode, tournament_id, delta, mmr_before, mmr_after, season_key, created_at)
+		VALUES ($1, '1x1', NULL, $2, $3, $4, $5, $6)`, userID, delta, before, before+delta, rule.Key, at)
+	return err
+}
+
 // RecomputeAllMmr полностью пересчитывает MMR (игроков и команд) с нуля по ВСЕМ завершённым
-// турнирам в хронологическом порядке: каждый матч - по правилам своего сезона.
+// турнирам и сверкам в хронологическом порядке: каждый матч - по правилам своего сезона.
 func (s *Store) RecomputeAllMmr(ctx context.Context) error {
 	for _, q := range []string{`TRUNCATE mmr_history`, `TRUNCATE team_mmr_history`, `DELETE FROM user_mmr`, `DELETE FROM team_mmr`} {
 		if _, err := s.Pool.Exec(ctx, q); err != nil {
 			return err
 		}
 	}
-	rows, err := s.Pool.Query(ctx,
-		`SELECT id FROM tournaments WHERE status='finished' ORDER BY COALESCE(starts_at, created_at), created_at`)
+	// Сверка в один момент с матчем идёт раньше него: она про рейтинг до этого матча.
+	rows, err := s.Pool.Query(ctx, `
+		SELECT id, '', '', 0, COALESCE(starts_at, created_at) AS at, 1 AS ord, created_at
+		FROM tournaments WHERE status = 'finished'
+		UNION ALL
+		SELECT '', user_id, COALESCE(season_id, ''), delta, at, 0, at FROM mmr_corrections
+		ORDER BY at, ord, created_at`)
 	if err != nil {
 		return err
 	}
-	var ids []string
+	type event struct {
+		tournamentID, userID, seasonID string
+		delta                          int
+		at                             time.Time
+	}
+	var events []event
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var e event
+		var ord int
+		var created time.Time
+		if err := rows.Scan(&e.tournamentID, &e.userID, &e.seasonID, &e.delta, &e.at, &ord, &created); err != nil {
 			rows.Close()
 			return err
 		}
-		ids = append(ids, id)
+		events = append(events, e)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, id := range ids {
-		if err := s.ApplyTournamentMmr(ctx, id); err != nil {
+	for _, e := range events {
+		var err error
+		if e.tournamentID != "" {
+			err = s.ApplyTournamentMmr(ctx, e.tournamentID)
+		} else {
+			err = s.applyCorrection(ctx, e.userID, e.seasonID, e.delta, e.at)
+		}
+		if err != nil {
 			return err
 		}
 	}

@@ -59,11 +59,15 @@ func TestMMRIntegration(t *testing.T) {
 		return b
 	}
 
-	// finish1x1 создаёт 1×1-турнир, ставит участников и завершает победой winnerIdx (0 или 1).
-	finish1x1 := func(a, b models.User, mult, winnerIdx int) {
+	// finish1x1 создаёт 1×1-турнир, ставит участников и завершает победой winnerIdx (0 или 1);
+	// games=2 - ×2 прошлых сезонов, засчитанный за два матча.
+	finish1x1 := func(a, b models.User, mult, games, winnerIdx int) {
 		tour, err := st.CreateTournament(ctx, models.Tournament{Title: "it-1x1", Mode: "1x1", RatingMultiplier: mult})
 		if err != nil {
 			t.Fatalf("CreateTournament: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE tournaments SET games = $2 WHERE id = $1`, tour.ID, games); err != nil {
+			t.Fatalf("games: %v", err)
 		}
 		pa, err := st.AddParticipant(ctx, models.Participant{TournamentID: tour.ID, Kind: "player", UserID: &a.ID, Name: a.Login, Seed: 1})
 		if err != nil {
@@ -106,15 +110,21 @@ func TestMMRIntegration(t *testing.T) {
 
 	// 1×1 обычный: равные 1000, победа A → 1016 / 984.
 	a, b := mkUser("a"), mkUser("b")
-	finish1x1(a, b, 1, 0)
+	finish1x1(a, b, 1, 1, 0)
 	assertUser(a, 1016)
 	assertUser(b, 984)
 
-	// 1×1 жетон ×2: победа C → 1031 / 969 (16, затем 15 от обновлённого рейтинга).
+	// 1×1 жетон ×2: один матч с удвоенным изменением → 1032 / 968.
 	c, d := mkUser("c"), mkUser("d")
-	finish1x1(c, d, 2, 0)
-	assertUser(c, 1031)
-	assertUser(d, 969)
+	finish1x1(c, d, 2, 1, 0)
+	assertUser(c, 1032)
+	assertUser(d, 968)
+
+	// ×2 прошлых сезонов - два матча: 1031 / 969 (16, затем 15 от обновлённого рейтинга).
+	c2, d2 := mkUser("c2"), mkUser("d2")
+	finish1x1(c2, d2, 2, 2, 0)
+	assertUser(c2, 1031)
+	assertUser(d2, 969)
 
 	// 2×2 командный: (E,F) бьют (G,H) → команда-победитель 1016, проигравшая 984.
 	e, f, g, h := mkUser("e"), mkUser("f"), mkUser("g"), mkUser("h")

@@ -11,13 +11,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at, rating_multiplier, format`
+const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at, rating_multiplier, format, games`
 
 func scanTournament(row pgx.Row) (models.Tournament, error) {
 	var t models.Tournament
 	var mapsRaw []byte
 	err := row.Scan(&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
-		&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format)
+		&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format, &t.Games)
 	if err != nil {
 		return t, err
 	}
@@ -182,7 +182,7 @@ func (s *Store) ListTournaments(ctx context.Context, status string) ([]models.To
 		var t models.Tournament
 		var mapsRaw []byte
 		if err := rows.Scan(&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
-			&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format, &t.ParticipantCount, &t.HasSpace); err != nil {
+			&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format, &t.Games, &t.ParticipantCount, &t.HasSpace); err != nil {
 			return nil, err
 		}
 		if len(mapsRaw) > 0 {

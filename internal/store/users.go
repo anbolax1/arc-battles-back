@@ -117,7 +117,12 @@ func (s *Store) GetUserByLogin(ctx context.Context, login string) (models.User, 
 func (s *Store) PlayerHistory(ctx context.Context, userID string) ([]models.PlayerHistoryItem, error) {
 	const q = `
 		SELECT t.id, t.title, t.mode, t.status, t.starts_at, p.name, p.total_points,
-		       (t.winner_participant_id IS NOT NULL AND t.winner_participant_id = p.id) AS win
+		       (t.winner_participant_id IS NOT NULL AND t.winner_participant_id = p.id) AS win,
+		       COALESCE(
+		           (SELECT h.delta FROM mmr_history h WHERE h.tournament_id = t.id AND h.user_id = $1 AND h.mode = '1x1'),
+		           (SELECT th.delta FROM team_mmr_history th JOIN team_mmr tm ON tm.team_key = th.team_key
+		             WHERE th.tournament_id = t.id AND (tm.member_a = $1 OR tm.member_b = $1) LIMIT 1)
+		       ) AS mmr_delta
 		FROM participants p
 		JOIN tournaments t ON t.id = p.tournament_id
 		WHERE p.user_id = $1
@@ -133,7 +138,7 @@ func (s *Store) PlayerHistory(ctx context.Context, userID string) ([]models.Play
 	out := []models.PlayerHistoryItem{}
 	for rows.Next() {
 		var h models.PlayerHistoryItem
-		if err := rows.Scan(&h.TournamentID, &h.Title, &h.Mode, &h.Status, &h.Date, &h.Name, &h.Points, &h.Win); err != nil {
+		if err := rows.Scan(&h.TournamentID, &h.Title, &h.Mode, &h.Status, &h.Date, &h.Name, &h.Points, &h.Win, &h.MmrDelta); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -231,10 +236,8 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 		offset = 0
 	}
 	// ORDER BY — из белого списка (не из сырого ввода), чтобы исключить инъекцию.
-	orderBy := "COALESCE(s.points, 0) DESC, u.display_name, u.login"
+	orderBy := "COALESCE(s.tournaments, 0) DESC, u.display_name, u.login"
 	switch sort {
-	case "tournaments":
-		orderBy = "COALESCE(s.tournaments, 0) DESC, u.display_name, u.login"
 	case "wins":
 		orderBy = "COALESCE(s.wins, 0) DESC, u.display_name, u.login"
 	case "joined":
