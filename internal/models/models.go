@@ -223,6 +223,8 @@ type Tournament struct {
 	Games               int              `json:"games"`            // сколько матчей засчитывает: 2 - ×2 прошлых сезонов (два матча подряд)
 	Maps                []string         `json:"maps"`
 	StartsAt            *time.Time       `json:"startsAt,omitempty"`
+	Prize               string           `json:"prize,omitempty"`      // приз шоу-матча
+	PreviewURL          string           `json:"previewUrl,omitempty"` // картинка анонса шоу-матча
 	WinnerParticipantID *string          `json:"winnerParticipantId,omitempty"`
 	CreatedAt           time.Time        `json:"createdAt"`
 	UpdatedAt           time.Time        `json:"updatedAt"`

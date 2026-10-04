@@ -11,22 +11,36 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at, rating_multiplier, format, games`
+const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at, rating_multiplier, format, games, prize, preview_path`
+
+// tournamentFields - куда читать колонки tournamentCols; finish доводит прочитанное до модели.
+func tournamentFields(t *models.Tournament) (dest []any, finish func()) {
+	var mapsRaw []byte
+	var preview string
+	dest = []any{&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
+		&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format, &t.Games,
+		&t.Prize, &preview}
+	finish = func() {
+		if len(mapsRaw) > 0 {
+			_ = json.Unmarshal(mapsRaw, &t.Maps)
+		}
+		if t.Maps == nil {
+			t.Maps = []string{}
+		}
+		if preview != "" {
+			t.PreviewURL = "/media/" + preview
+		}
+	}
+	return dest, finish
+}
 
 func scanTournament(row pgx.Row) (models.Tournament, error) {
 	var t models.Tournament
-	var mapsRaw []byte
-	err := row.Scan(&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
-		&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format, &t.Games)
-	if err != nil {
+	dest, finish := tournamentFields(&t)
+	if err := row.Scan(dest...); err != nil {
 		return t, err
 	}
-	if len(mapsRaw) > 0 {
-		_ = json.Unmarshal(mapsRaw, &t.Maps)
-	}
-	if t.Maps == nil {
-		t.Maps = []string{}
-	}
+	finish()
 	return t, nil
 }
 
@@ -180,17 +194,11 @@ func (s *Store) ListTournaments(ctx context.Context, status string) ([]models.To
 	out := []models.Tournament{}
 	for rows.Next() {
 		var t models.Tournament
-		var mapsRaw []byte
-		if err := rows.Scan(&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
-			&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format, &t.Games, &t.ParticipantCount, &t.HasSpace); err != nil {
+		dest, finish := tournamentFields(&t)
+		if err := rows.Scan(append(dest, &t.ParticipantCount, &t.HasSpace)...); err != nil {
 			return nil, err
 		}
-		if len(mapsRaw) > 0 {
-			_ = json.Unmarshal(mapsRaw, &t.Maps)
-		}
-		if t.Maps == nil {
-			t.Maps = []string{}
-		}
+		finish()
 		out = append(out, t)
 	}
 	return out, rows.Err()

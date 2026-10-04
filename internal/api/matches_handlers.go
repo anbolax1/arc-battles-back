@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/battle-for-respect/backend/internal/media"
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/battle-for-respect/backend/internal/store"
 	"github.com/go-chi/chi/v5"
@@ -152,6 +153,7 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		RatingMultiplier int        `json:"ratingMultiplier"`
 		Format           string     `json:"format"`
 		StartsAt         *time.Time `json:"startsAt"`
+		Prize            string     `json:"prize"`
 		Sides            []struct {
 			UserID  string   `json:"userId"`
 			Members []string `json:"members"`
@@ -170,8 +172,13 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "укажите дату и время шоу-матча")
 		return
 	}
+	prize, ok := checkPrize(w, b.Prize)
+	if !ok {
+		return
+	}
 	in := store.NewMatch{
 		Mode: b.Mode, PlayerType: b.PlayerType, RatingMultiplier: b.RatingMultiplier, Format: b.Format, StartsAt: b.StartsAt,
+		Prize: prize,
 	}
 	for i, sd := range b.Sides {
 		if b.Mode == "2x2" {
@@ -332,6 +339,112 @@ func (s *Server) handleRescheduleMatch(w http.ResponseWriter, r *http.Request) {
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
+// maxPrize - приз стоит крупно в анонсе, поэтому строка короткая.
+const maxPrize = 120
+
+// showPreviewDir - папка картинок-превью шоу-матчей в хранилище медиа.
+const showPreviewDir = "shows"
+
+func checkPrize(w http.ResponseWriter, raw string) (string, bool) {
+	prize := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(prize) > maxPrize {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("приз — до %d символов", maxPrize))
+		return "", false
+	}
+	return prize, true
+}
+
+// POST /api/tournaments/{id}/prize {prize} - приз шоу-матча; пусто - без приза.
+func (s *Server) handleSetPrize(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var b struct {
+		Prize string `json:"prize"`
+	}
+	if err := readJSON(r, &b); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	prize, ok := checkPrize(w, b.Prize)
+	if !ok {
+		return
+	}
+	switch err := s.Store.SetShowPrize(r.Context(), id, prize); {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "матч не найден")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
+// PUT /api/tournaments/{id}/preview - картинка-превью шоу-матча: файл в теле запроса либо {url} -
+// тогда сервер скачивает картинку к себе.
+func (s *Server) handleSetPreview(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, err := s.Store.TournamentStatus(r.Context(), id); err != nil {
+		writeError(w, http.StatusNotFound, "матч не найден")
+		return
+	}
+	// Новое имя у каждой картинки: браузер не покажет прежнюю из кэша.
+	name := fmt.Sprintf("%s-%d", id, time.Now().UnixNano())
+	var rel string
+	var err error
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		var b struct {
+			URL string `json:"url"`
+		}
+		if err := readJSON(r, &b); err != nil {
+			writeError(w, http.StatusBadRequest, "некорректный JSON")
+			return
+		}
+		rel, err = s.Media.FetchImage(r.Context(), b.URL, showPreviewDir, name)
+	} else {
+		rel, err = s.Media.SaveImage(showPreviewDir, name, http.MaxBytesReader(w, r.Body, media.MaxImageBytes+1))
+	}
+	if err != nil {
+		writePreviewError(w, err)
+		return
+	}
+	old := s.Store.ShowPreviewPath(r.Context(), id)
+	if err := s.Store.SetShowPreview(r.Context(), id, rel); err != nil {
+		s.Media.Remove(rel)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.Media.Remove(old)
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
+// DELETE /api/tournaments/{id}/preview - убрать картинку-превью.
+func (s *Server) handleDeletePreview(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	old := s.Store.ShowPreviewPath(r.Context(), id)
+	switch err := s.Store.SetShowPreview(r.Context(), id, ""); {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "матч не найден")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.Media.Remove(old)
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
+func writePreviewError(w http.ResponseWriter, err error) {
+	var tooBig *http.MaxBytesError
+	switch {
+	case errors.Is(err, media.ErrImageTooLarge), errors.As(err, &tooBig):
+		writeError(w, http.StatusBadRequest, media.ErrImageTooLarge.Error())
+	case errors.Is(err, media.ErrNotImage), errors.Is(err, media.ErrBadImageURL), errors.Is(err, media.ErrImageFetch):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "не удалось сохранить картинку")
+	}
+}
+
 // POST /api/tournaments/{id}/finish - завершить матч (досрочно - тоже): победитель и MMR сразу.
 func (s *Server) handleFinishMatch(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -351,10 +464,12 @@ func (s *Server) handleCancelMatch(w http.ResponseWriter, r *http.Request) {
 	if !s.matchGuard(w, r, id) {
 		return
 	}
+	preview := s.Store.ShowPreviewPath(r.Context(), id)
 	if err := s.Store.DeleteTournament(r.Context(), id); err != nil && !errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.Media.Remove(preview)
 	if env, err := s.stateEnvelope(s.overlayStateBytes(r.Context())); err == nil {
 		s.Hub.Broadcast(env)
 	}

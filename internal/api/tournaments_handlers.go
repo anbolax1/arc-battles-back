@@ -160,6 +160,7 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 // НЕ трогаются; поставленные игроки возвращаются в пул заявок. Organizer-only.
 func (s *Server) handleDeleteTournament(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	preview := s.Store.ShowPreviewPath(r.Context(), id)
 	if err := s.Store.DeleteTournament(r.Context(), id); errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "турнир не найден")
 		return
@@ -167,6 +168,7 @@ func (s *Server) handleDeleteTournament(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.Media.Remove(preview)
 	w.WriteHeader(http.StatusNoContent)
 }
 

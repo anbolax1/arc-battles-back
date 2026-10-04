@@ -33,6 +33,7 @@ type NewMatch struct {
 	RatingMultiplier int
 	Format           string     // match | show
 	StartsAt         *time.Time // когда начнётся шоу-матч
+	Prize            string     // приз шоу-матча
 	Sides            [2]MatchSide
 }
 
@@ -147,11 +148,11 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 
 	var id string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, season_id, format)
-		VALUES ($1, $2, $3, $4, $5, '[]', $6, $7, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1), $8)
+		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, season_id, format, prize)
+		VALUES ($1, $2, $3, $4, $5, '[]', $6, $7, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1), $8, $9)
 		RETURNING id`,
 		a.part.Name+" vs "+b.part.Name, in.Mode, NormalizePlayerType(in.PlayerType), status, rounds, startsAt,
-		in.RatingMultiplier, in.Format).Scan(&id); err != nil {
+		in.RatingMultiplier, in.Format, in.Prize).Scan(&id); err != nil {
 		return models.Tournament{}, err
 	}
 	for n := 1; n <= rounds; n++ {
@@ -197,6 +198,37 @@ func (s *Store) StartShowMatch(ctx context.Context, id string) error {
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrConflict
+	}
+	return nil
+}
+
+// SetShowPrize меняет приз шоу-матча; пусто - без приза.
+func (s *Store) SetShowPrize(ctx context.Context, id, prize string) error {
+	ct, err := s.Pool.Exec(ctx, `UPDATE tournaments SET prize = $2, updated_at = now() WHERE id = $1`, id, prize)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ShowPreviewPath - файл картинки-превью в хранилище медиа; пусто - превью нет.
+func (s *Store) ShowPreviewPath(ctx context.Context, id string) string {
+	var path string
+	_ = s.Pool.QueryRow(ctx, `SELECT preview_path FROM tournaments WHERE id = $1`, id).Scan(&path)
+	return path
+}
+
+// SetShowPreview запоминает картинку-превью шоу-матча; пусто - убрать.
+func (s *Store) SetShowPreview(ctx context.Context, id, path string) error {
+	ct, err := s.Pool.Exec(ctx, `UPDATE tournaments SET preview_path = $2, updated_at = now() WHERE id = $1`, id, path)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }
