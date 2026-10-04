@@ -244,22 +244,24 @@ type Registration struct {
 }
 
 type LeaderboardRow struct {
-	UserID      string `json:"userId"`
-	Login       string `json:"login"`
-	DisplayName string `json:"displayName"`
-	AvatarURL   string `json:"avatarUrl"`
-	Mmr         int    `json:"mmr"`    // рейтинг по исходам (старт 1000, сквозной по сезонам)
-	Points      int    `json:"points"` // сумма набранных баллов за сезон (вторично, для контекста)
-	Wins        int    `json:"wins"`
-	Tournaments int    `json:"tournaments"`
+	UserID      string    `json:"userId"`
+	Login       string    `json:"login"`
+	DisplayName string    `json:"displayName"`
+	AvatarURL   string    `json:"avatarUrl"`
+	Mmr         int       `json:"mmr"`    // рейтинг по исходам (старт 1000, сквозной по сезонам)
+	Points      int       `json:"points"` // сумма набранных баллов за сезон (вторично, для контекста)
+	Wins        int       `json:"wins"`
+	Tournaments int       `json:"tournaments"`
+	Tags        []UserTag `json:"tags,omitempty"` // теги, видные на сайте
 }
 
 // TeamMember — игрок в составе команды 2×2 (для командного лидерборда).
 type TeamMember struct {
-	UserID      string `json:"userId"`
-	Login       string `json:"login"`
-	DisplayName string `json:"displayName"`
-	AvatarURL   string `json:"avatarUrl"`
+	UserID      string    `json:"userId"`
+	Login       string    `json:"login"`
+	DisplayName string    `json:"displayName"`
+	AvatarURL   string    `json:"avatarUrl"`
+	Tags        []UserTag `json:"tags,omitempty"` // теги, видные на сайте
 }
 
 // TeamLeaderboardRow — строка рейтинга 2×2 по КОМАНДАМ (пара игроков = команда с одним MMR).

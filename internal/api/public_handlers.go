@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -46,6 +48,18 @@ func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		ids := []string{}
+		for _, t := range teams {
+			for _, m := range t.Members {
+				ids = append(ids, m.UserID)
+			}
+		}
+		tags := s.siteTags(r.Context(), ids)
+		for i := range teams {
+			for j := range teams[i].Members {
+				teams[i].Members[j].Tags = tags[teams[i].Members[j].UserID]
+			}
+		}
 		rows = teams
 	} else {
 		players, err := s.Store.Leaderboard(r.Context(), mode, seasonID)
@@ -53,9 +67,27 @@ func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		ids := make([]string, len(players))
+		for i, p := range players {
+			ids[i] = p.UserID
+		}
+		tags := s.siteTags(r.Context(), ids)
+		for i := range players {
+			players[i].Tags = tags[players[i].UserID]
+		}
 		rows = players
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "seasonId": seasonID, "rows": rows})
+}
+
+// siteTags - теги игроков, которые видны на сайте, как в профиле. Без тегов таблица всё равно
+// нужна, поэтому сбой чтения тегов не роняет ответ.
+func (s *Server) siteTags(ctx context.Context, userIDs []string) map[string][]models.UserTag {
+	tags, err := s.Store.TagsForUsers(ctx, userIDs, true)
+	if err != nil {
+		return map[string][]models.UserTag{}
+	}
+	return tags
 }
 
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
