@@ -8,6 +8,29 @@ import (
 	"github.com/battle-for-respect/backend/internal/models"
 )
 
+// Карты матча (t - его турнир). Берутся из раундов; у перенесённых из таблицы матчей без карт в раундах -
+// из списка карт матча.
+
+// matchMapsLabel - все карты матча строкой по порядку раундов, как в архиве.
+const matchMapsLabel = `COALESCE(
+		(SELECT string_agg(r.map, ' · ' ORDER BY r.number) FROM rounds r WHERE r.tournament_id = t.id AND r.map <> ''),
+		(SELECT string_agg(m, ' · ') FROM jsonb_array_elements_text(t.maps) m WHERE m <> ''), '')`
+
+// matchMapsJoin даёт по строке на каждую карту матча (mm.map): матч на двух картах идёт в статистику обеих.
+const matchMapsJoin = `LEFT JOIN LATERAL (
+		SELECT r.map FROM rounds r WHERE r.tournament_id = t.id AND r.map <> ''
+		UNION
+		SELECT m FROM jsonb_array_elements_text(t.maps) m
+		WHERE m <> '' AND NOT EXISTS (SELECT 1 FROM rounds r2 WHERE r2.tournament_id = t.id AND r2.map <> '')
+	) mm(map) ON true`
+
+// В старых сезонах названия карт набраны капсом и без «ё»: одна карта - одна строка статистики,
+// название берётся обычное, не капсом.
+const (
+	mapStatKey  = `replace(upper(COALESCE(mm.map, '')), 'Ё', 'Е')`
+	mapStatName = `COALESCE((array_agg(mm.map ORDER BY mm.map = upper(mm.map), mm.map))[1], '')`
+)
+
 // ================== Общая агрегация статистики из ленты матчей ==================
 
 // computeMmrStats считает сводку по хронологической (ASC) ленте матчей: первый матч, пик MMR,
@@ -68,14 +91,14 @@ func computeMmrStats(points []models.MmrPoint) models.MmrStats {
 
 // ================== 1×1 (игроки) ==================
 
-// Player1x1Timeline — динамика MMR игрока в 1×1 (ASC по времени): соперник, карта, дельта, исход.
+// Player1x1Timeline — динамика MMR игрока в 1×1 (ASC по времени): соперник, карты, дельта, исход.
 func (s *Store) Player1x1Timeline(ctx context.Context, userID string) ([]models.MmrPoint, error) {
 	const q = `
 		SELECT COALESCE(h.tournament_id, ''), COALESCE(t.title, 'Сверка рейтинга'), h.created_at, h.delta, h.mmr_after,
 		       COALESCE(t.rating_multiplier, 1), COALESCE(t.games, 1), h.season_key, h.tournament_id IS NULL,
 		       COALESCE(opp.name, '') AS opp_name,
 		       COALESCE(uu.login, '') AS opp_login,
-		       COALESCE(NULLIF(r.map, ''), t.maps->>0, '') AS map
+		       ` + matchMapsLabel + ` AS map
 		FROM mmr_history h
 		LEFT JOIN tournaments t ON t.id = h.tournament_id
 		LEFT JOIN LATERAL (
@@ -84,24 +107,24 @@ func (s *Store) Player1x1Timeline(ctx context.Context, userID string) ([]models.
 		    ORDER BY p2.seed LIMIT 1
 		) opp ON true
 		LEFT JOIN users uu ON uu.id = opp.user_id
-		LEFT JOIN LATERAL (SELECT map FROM rounds WHERE tournament_id = t.id ORDER BY number LIMIT 1) r ON true
 		WHERE h.user_id = $1 AND h.mode = '1x1'
 		ORDER BY h.created_at ASC, t.created_at ASC NULLS FIRST`
 	return s.scanTimeline(ctx, q, userID)
 }
 
-// Player1x1Maps — разбивка матчей 1×1 по картам (взвешенно по ×2).
+// Player1x1Maps — разбивка матчей 1×1 по картам (взвешенно по ×2); матч на нескольких картах
+// засчитан на каждую.
 func (s *Store) Player1x1Maps(ctx context.Context, userID string) ([]models.MapStat, error) {
 	const q = `
-		SELECT COALESCE(NULLIF(r.map, ''), t.maps->>0, '') AS mp,
+		SELECT ` + mapStatName + ` AS mp,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0), 0)::int AS wins,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM mmr_history h
 		JOIN tournaments t ON t.id = h.tournament_id
-		LEFT JOIN LATERAL (SELECT map FROM rounds WHERE tournament_id = t.id ORDER BY number LIMIT 1) r ON true
+		` + matchMapsJoin + `
 		WHERE h.user_id = $1 AND h.mode = '1x1'
-		GROUP BY mp
+		GROUP BY ` + mapStatKey + `
 		ORDER BY games DESC, mp`
 	return s.scanMapStats(ctx, q, userID)
 }
@@ -238,13 +261,13 @@ func (s *Store) TeamPlace(ctx context.Context, teamMmr int) (int, error) {
 	return above + 1, nil
 }
 
-// TeamTimeline — динамика MMR команды (ASC по времени): соперник (команда), карта, дельта, исход.
+// TeamTimeline — динамика MMR команды (ASC по времени): соперник (команда), карты, дельта, исход.
 func (s *Store) TeamTimeline(ctx context.Context, teamKey string) ([]models.MmrPoint, error) {
 	const q = `
 		SELECT h.tournament_id, t.title, h.created_at, h.delta, h.mmr_after, t.rating_multiplier, t.games, h.season_key,
 		       COALESCE(opp.team_key, '') AS opp_key,
 		       COALESCE(ua.login, '') AS opp_a, COALESCE(ub.login, '') AS opp_b,
-		       COALESCE(NULLIF(r.map, ''), t.maps->>0, '') AS map
+		       ` + matchMapsLabel + ` AS map
 		FROM team_mmr_history h
 		JOIN tournaments t ON t.id = h.tournament_id
 		LEFT JOIN LATERAL (
@@ -254,7 +277,6 @@ func (s *Store) TeamTimeline(ctx context.Context, teamKey string) ([]models.MmrP
 		LEFT JOIN team_mmr tmo ON tmo.team_key = opp.team_key
 		LEFT JOIN users ua ON ua.id = tmo.member_a
 		LEFT JOIN users ub ON ub.id = tmo.member_b
-		LEFT JOIN LATERAL (SELECT map FROM rounds WHERE tournament_id = t.id ORDER BY number LIMIT 1) r ON true
 		WHERE h.team_key = $1
 		ORDER BY h.created_at ASC, t.created_at ASC`
 	rows, err := s.Pool.Query(ctx, q, teamKey)
@@ -277,18 +299,19 @@ func (s *Store) TeamTimeline(ctx context.Context, teamKey string) ([]models.MmrP
 	return out, rows.Err()
 }
 
-// TeamMaps — разбивка матчей команды по картам (взвешенно по ×2).
+// TeamMaps — разбивка матчей команды по картам (взвешенно по ×2); матч на нескольких картах
+// засчитан на каждую.
 func (s *Store) TeamMaps(ctx context.Context, teamKey string) ([]models.MapStat, error) {
 	const q = `
-		SELECT COALESCE(NULLIF(r.map, ''), t.maps->>0, '') AS mp,
+		SELECT ` + mapStatName + ` AS mp,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0), 0)::int AS wins,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM team_mmr_history h
 		JOIN tournaments t ON t.id = h.tournament_id
-		LEFT JOIN LATERAL (SELECT map FROM rounds WHERE tournament_id = t.id ORDER BY number LIMIT 1) r ON true
+		` + matchMapsJoin + `
 		WHERE h.team_key = $1
-		GROUP BY mp
+		GROUP BY ` + mapStatKey + `
 		ORDER BY games DESC, mp`
 	return s.scanMapStats(ctx, q, teamKey)
 }

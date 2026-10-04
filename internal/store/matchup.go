@@ -162,11 +162,10 @@ func (s *Store) headToHead(ctx context.Context, t models.Tournament, a, b models
 	rows, err := s.Pool.Query(ctx, `
 		SELECT t.id, t.starts_at, t.games,
 		       CASE t.winner_participant_id WHEN pa.id THEN 0 WHEN pb.id THEN 1 ELSE -1 END,
-		       COALESCE(NULLIF(r.map, ''), t.maps->>0, '')
+		       `+matchMapsLabel+`
 		FROM tournaments t
 		JOIN participants pa ON pa.tournament_id = t.id AND `+fmt.Sprintf(cond, "pa", 2)+`
 		JOIN participants pb ON pb.tournament_id = t.id AND pb.id <> pa.id AND `+fmt.Sprintf(cond, "pb", 3)+`
-		LEFT JOIN LATERAL (SELECT map FROM rounds WHERE tournament_id = t.id ORDER BY number LIMIT 1) r ON true
 		WHERE t.id <> $1 AND t.mode = $4 AND t.status = 'finished'
 		ORDER BY COALESCE(t.starts_at, t.created_at) DESC`, t.ID, argA, argB, t.Mode)
 	if err != nil {
