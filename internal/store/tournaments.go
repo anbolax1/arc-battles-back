@@ -168,6 +168,8 @@ func (s *Store) DeleteTournament(ctx context.Context, id string) error {
 	return tx.Commit(ctx)
 }
 
+// ListTournaments - матчи для списков: вместо полного состава - стороны со счётом и карты раундов.
+// У сыгранного матча - только начатых раундов: при досрочном завершении следующая карта не сыграна.
 func (s *Store) ListTournaments(ctx context.Context, status string) ([]models.Tournament, error) {
 	q := `SELECT ` + tournamentCols + `,
 		(SELECT COUNT(*) FROM participants WHERE tournament_id = tournaments.id),
@@ -176,7 +178,14 @@ func (s *Store) ListTournaments(ctx context.Context, status string) ([]models.To
 			OR EXISTS (SELECT 1 FROM participants p WHERE p.tournament_id = tournaments.id AND jsonb_array_length(p.members) < 2)
 		) ELSE (
 			(SELECT COUNT(*) FROM participants p WHERE p.tournament_id = tournaments.id) < 2
-		) END
+		) END,
+		(SELECT COALESCE(jsonb_agg(jsonb_build_object(
+			'name', p.name, 'points', p.total_points,
+			'winner', COALESCE(p.id = tournaments.winner_participant_id, false)) ORDER BY p.seed), '[]'::jsonb)
+		 FROM participants p WHERE p.tournament_id = tournaments.id),
+		COALESCE((SELECT jsonb_agg(r.map ORDER BY r.number) FROM rounds r
+		          WHERE r.tournament_id = tournaments.id AND r.map <> ''
+		            AND (r.status <> 'pending' OR tournaments.status <> 'finished')), tournaments.maps, '[]'::jsonb)
 		FROM tournaments`
 	args := []any{}
 	if status != "" {
@@ -194,11 +203,18 @@ func (s *Store) ListTournaments(ctx context.Context, status string) ([]models.To
 	out := []models.Tournament{}
 	for rows.Next() {
 		var t models.Tournament
+		var scoreRaw, mapsRaw []byte
 		dest, finish := tournamentFields(&t)
-		if err := rows.Scan(append(dest, &t.ParticipantCount, &t.HasSpace)...); err != nil {
+		if err := rows.Scan(append(dest, &t.ParticipantCount, &t.HasSpace, &scoreRaw, &mapsRaw)...); err != nil {
 			return nil, err
 		}
 		finish()
+		if err := json.Unmarshal(scoreRaw, &t.Score); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(mapsRaw, &t.RoundMaps); err != nil {
+			return nil, err
+		}
 		out = append(out, t)
 	}
 	return out, rows.Err()

@@ -228,11 +228,20 @@ type Tournament struct {
 	WinnerParticipantID *string          `json:"winnerParticipantId,omitempty"`
 	CreatedAt           time.Time        `json:"createdAt"`
 	UpdatedAt           time.Time        `json:"updatedAt"`
-	ParticipantCount    int              `json:"participantCount"` // в списках (без полного participants[])
-	HasSpace            bool             `json:"hasSpace"`         // есть ли свободные слоты (1×1: <2 игроков; 2×2: <2 команд или неполная команда)
+	ParticipantCount    int              `json:"participantCount"`    // в списках (без полного participants[])
+	HasSpace            bool             `json:"hasSpace"`            // есть ли свободные слоты (1×1: <2 игроков; 2×2: <2 команд или неполная команда)
+	Score               []SideScore      `json:"score,omitempty"`     // в списках: стороны по порядку со счётом
+	RoundMaps           []string         `json:"roundMaps,omitempty"` // в списках: карты по раундам
 	Participants        []Participant    `json:"participants,omitempty"`
 	Rounds              []Round          `json:"rounds,omitempty"`
 	MmrChanges          []ParticipantMmr `json:"mmrChanges,omitempty"` // изменение MMR сторон за этот матч (для завершённых)
+}
+
+// SideScore — сторона матча в списках: имя, очки и победила ли она.
+type SideScore struct {
+	Name   string `json:"name"`
+	Points int    `json:"points"`
+	Winner bool   `json:"winner,omitempty"`
 }
 
 // ParticipantMmr — изменение MMR стороны за конкретный матч (стр. турнира).
