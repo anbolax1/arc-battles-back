@@ -62,6 +62,7 @@ func main() {
 	}
 
 	srv := api.New(cfg, st, ws.NewHub())
+	srv.Media.LightenExisting()
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr(),

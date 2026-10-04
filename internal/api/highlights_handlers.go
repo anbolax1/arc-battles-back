@@ -77,6 +77,7 @@ func (s *Server) handleCreateHighlight(w http.ResponseWriter, r *http.Request) {
 		if e := s.Store.SetHighlightProcessed(context.Background(), id, file, thumb, preview, dur); e != nil {
 			log.Printf("highlight %s: сохранение результата: %v", id, e)
 		}
+		s.Media.LightenLater(id)
 	}(h.ID, clipURL)
 
 	writeJSON(w, http.StatusCreated, h)
@@ -119,6 +120,7 @@ func (s *Server) createHighlightUpload(w http.ResponseWriter, r *http.Request, u
 		writeError(w, http.StatusInternalServerError, e.Error())
 		return
 	}
+	s.Media.LightenLater(h.ID)
 	out, _ := s.Store.GetHighlight(r.Context(), h.ID)
 	writeJSON(w, http.StatusCreated, out)
 }
