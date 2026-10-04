@@ -299,7 +299,8 @@ type LeaderboardRow struct {
 	Mmr         int       `json:"mmr"`    // рейтинг по исходам (старт 1000, сквозной по сезонам)
 	Points      int       `json:"points"` // сумма набранных баллов за сезон (вторично, для контекста)
 	Wins        int       `json:"wins"`
-	Tournaments int       `json:"tournaments"`
+	Losses      int       `json:"losses"`         // без ничьих
+	Tournaments int       `json:"tournaments"`    // матчей, вместе с ничьими
 	Tags        []UserTag `json:"tags,omitempty"` // теги, видные на сайте
 }
 

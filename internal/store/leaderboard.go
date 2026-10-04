@@ -19,7 +19,8 @@ func (s *Store) seasonStart(ctx context.Context, seasonID string) int {
 
 // Leaderboard агрегирует рейтинг 1×1 по игрокам. В рейтинг идут ТОЛЬКО завершённые турниры
 // (status='finished'). MMR считается внутри сезона: в таблице сезона - MMR этого сезона, в таблице
-// «за всё время» - MMR текущего сезона. wins и games учитывают жетон ×2 (матч = 2).
+// «за всё время» - MMR текущего сезона. wins, losses и games учитывают жетон ×2 (матч = 2);
+// ничья - ни победа, ни поражение, но матч.
 //
 //	seasonID="" — за всё время; иначе только турниры этого сезона.
 func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]models.LeaderboardRow, error) {
@@ -31,6 +32,7 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 		        END)::int AS mmr,
 		       COALESCE(SUM(p.total_points), 0)::int AS points,
 		       COALESCE(SUM(CASE WHEN t.winner_participant_id = p.id THEN t.games ELSE 0 END), 0)::int AS wins,
+		       COALESCE(SUM(CASE WHEN t.winner_participant_id <> p.id THEN t.games ELSE 0 END), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM participants p
 		JOIN tournaments t ON t.id = p.tournament_id AND t.mode = '1x1' AND t.status = 'finished'
@@ -50,7 +52,7 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 	out := []models.LeaderboardRow{}
 	for rows.Next() {
 		var r models.LeaderboardRow
-		if err := rows.Scan(&r.UserID, &r.Login, &r.DisplayName, &r.AvatarURL, &r.Mmr, &r.Points, &r.Wins, &r.Tournaments); err != nil {
+		if err := rows.Scan(&r.UserID, &r.Login, &r.DisplayName, &r.AvatarURL, &r.Mmr, &r.Points, &r.Wins, &r.Losses, &r.Tournaments); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
