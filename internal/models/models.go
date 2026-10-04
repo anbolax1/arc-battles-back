@@ -42,6 +42,34 @@ type User struct {
 	Role        Role      `json:"role"`
 	EmbarkID    string    `json:"embarkId"`
 	CreatedAt   time.Time `json:"createdAt"`
+	Tags        []UserTag `json:"tags,omitempty"`
+}
+
+// UserTag - тег игрока; Visible - организатор показывает его на сайте, HiddenByUser - игрок
+// сам убрал его из профиля.
+type UserTag struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Color        string `json:"color"`
+	Visible      bool   `json:"visible"`
+	HiddenByUser bool   `json:"hiddenByUser,omitempty"`
+}
+
+// Tag - тег в кабинете вместе с теми, кому он выдан. Тег с ролью есть у всех с этой ролью,
+// тег с сезоном выдаётся сам победителю сезона.
+type Tag struct {
+	UserTag
+	Role        string      `json:"role,omitempty"`
+	SeasonID    *string     `json:"seasonId,omitempty"`
+	SeasonName  string      `json:"seasonName,omitempty"`
+	HolderCount int         `json:"holderCount"`
+	Holders     []TagHolder `json:"holders"`
+}
+
+type TagHolder struct {
+	UserID      string `json:"userId"`
+	Login       string `json:"login"`
+	DisplayName string `json:"displayName"`
 }
 
 // Season — период рейтинга. Ровно один active одновременно; завершённый имеет ended_at.

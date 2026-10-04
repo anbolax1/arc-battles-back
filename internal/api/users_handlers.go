@@ -33,6 +33,15 @@ func (s *Server) handleListUsersOverview(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	ids := make([]string, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	if tags, err := s.Store.TagsForUsers(r.Context(), ids, false); err == nil {
+		for i := range items {
+			items[i].Tags = tags[items[i].ID]
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }
 
@@ -97,6 +106,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	u.Tags, _ = s.Store.UserTags(r.Context(), u.ID, true)
 	history, err := s.Store.PlayerHistory(r.Context(), u.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

@@ -181,6 +181,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
+	u.Tags, _ = s.Store.UserTags(r.Context(), u.ID, true)
 	writeJSON(w, http.StatusOK, u)
 }
 

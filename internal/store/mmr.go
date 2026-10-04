@@ -199,11 +199,14 @@ func (s *Store) RefreshMmrCaches(ctx context.Context) error {
 		WHERE season_key = $1 GROUP BY user_id, mode`, rule.Key, rule.Start); err != nil {
 		return err
 	}
-	_, err := s.Pool.Exec(ctx, `
+	if _, err := s.Pool.Exec(ctx, `
 		UPDATE team_mmr tm SET mmr = $2::int + COALESCE((
 			SELECT SUM(h.delta) FROM team_mmr_history h WHERE h.team_key = tm.team_key AND h.season_key = $1
-		), 0), updated_at = now()`, rule.Key, rule.Start)
-	return err
+		), 0), updated_at = now()`, rule.Key, rule.Start); err != nil {
+		return err
+	}
+	// Смена сезона или пересчёт могут поменять победителей прошлых сезонов.
+	return s.SyncSeasonWinnerTags(ctx)
 }
 
 // ApplyTournamentMmr пересчитывает MMR по итогу турнира (турнир нового концепта = один матч,
