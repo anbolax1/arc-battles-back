@@ -70,6 +70,22 @@ ssh admin2@$VPS 'mv -f ~/back/server-linux.bak ~/back/server-linux && systemctl 
 - В репозитории — только шаблон `.env.example`. Реальный `.env` в git не попадает (gitignore).
 - Меняешь `.env` → `systemctl --user restart respect-back`.
 
+## Перенос матчей с arcarena.ru (таймер)
+
+Матчи, сыгранные на arcarena.ru, переносит на сайт `~/back/arenasync-linux` (`cmd/arenasync`) -
+раз в 10 минут его запускает таймер `arena-sync`. Бинарь выкатывает CI вместе с сервером.
+Включается один раз:
+
+```bash
+scp deploy/systemd/arena-sync.* admin2@$VPS:~/.config/systemd/user/
+ssh admin2@$VPS 'cd ~/back && ./arenasync-linux -dry-run'   # что будет перенесено, без записи в базу
+ssh admin2@$VPS 'systemctl --user daemon-reload && systemctl --user enable --now arena-sync.timer'
+```
+
+- Лог: `journalctl --user -u arena-sync -n 50 --no-pager` (пустые запуски молчат).
+- Выключить: `systemctl --user disable --now arena-sync.timer`.
+- Не путать с `arc-sync.timer` (старый перенос из таблицы 2 сезона) - он выключен и включать его нельзя.
+
 ## Траблшутинг
 
 ```bash

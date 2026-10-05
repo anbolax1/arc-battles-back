@@ -1,0 +1,11 @@
+# Положить вместе с arena-sync.service в ~/.config/systemd/user/ на сервере.
+# Включить: systemctl --user daemon-reload && systemctl --user enable --now arena-sync.timer
+[Unit]
+Description=Перенос матчей с arcarena.ru каждые 10 минут
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

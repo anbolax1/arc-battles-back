@@ -1,7 +1,8 @@
 name: Deploy backend
 
-# Автодеплой: сборка статического бинаря на раннере → заливка на VPS → рестарт.
-# Миграции БД прогоняются бинарём на старте. Секреты репозитория:
+# Автодеплой: сборка статических бинарей на раннере → заливка на VPS → рестарт.
+# Миграции БД прогоняются бинарём на старте. arenasync-linux (таймер arena-sync) пересчитывает
+# MMR, поэтому выкатывается вместе с сервером - правила подсчёта у них одни. Секреты репозитория:
 #   SSH_HOST  — IP/домен VPS (напр. 155.212.133.147)
 #   SSH_USER  — admin2
 #   SSH_KEY   — приватный deploy-ключ (целиком, с BEGIN/END)
@@ -38,8 +39,10 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Build linux binary
-        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o server-linux.new ./cmd/server
+      - name: Build linux binaries
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o server-linux.new ./cmd/server
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o arenasync-linux.new ./cmd/arenasync
 
       - name: Deploy over SSH (migrations run on startup)
         env:
@@ -54,12 +57,13 @@ jobs:
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           echo "deploy key fingerprint: $(ssh-keygen -yf ~/.ssh/id | awk '{print $1" "substr($2,1,24)"..."}')"
           SSH="ssh -i ~/.ssh/id -o StrictHostKeyChecking=accept-new"
-          scp -i ~/.ssh/id -o StrictHostKeyChecking=accept-new server-linux.new "$SSH_USER@$SSH_HOST:back/"
+          scp -i ~/.ssh/id -o StrictHostKeyChecking=accept-new server-linux.new arenasync-linux.new "$SSH_USER@$SSH_HOST:back/"
           $SSH "$SSH_USER@$SSH_HOST" '
             set -e
             export XDG_RUNTIME_DIR=/run/user/$(id -u)
-            chmod +x ~/back/server-linux.new
+            chmod +x ~/back/server-linux.new ~/back/arenasync-linux.new
             mv -f ~/back/server-linux.new ~/back/server-linux
+            mv -f ~/back/arenasync-linux.new ~/back/arenasync-linux
             systemctl --user restart respect-back
             sleep 2
             curl -fsS localhost:8080/api/health

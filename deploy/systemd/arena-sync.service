@@ -1,0 +1,10 @@
+# Перенос сыгранных на arcarena.ru матчей на сайт (cmd/arenasync), запускает arena-sync.timer.
+# Читает DATABASE_URL из ~/back/.env.
+[Unit]
+Description=Battle for Respect - перенос матчей с arcarena.ru
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/back
+ExecStart=%h/back/arenasync-linux
