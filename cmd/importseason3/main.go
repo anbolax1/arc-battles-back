@@ -21,19 +21,16 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/battle-for-respect/backend/internal/db"
-	"github.com/battle-for-respect/backend/internal/models"
+	"github.com/battle-for-respect/backend/internal/matchimport"
 	"github.com/battle-for-respect/backend/internal/store"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,86 +38,11 @@ const (
 	sheetID    = "1oDrIVsXs3MZnNobpvGR19el4P6zwsdDMH98vyr7xi2g"
 	sheetGID   = "431193452" // «Сезон 3: Матчи 1х1»
 	sheetFile  = "s3_1x1.csv"
-	arenaAPI   = "https://arcarena.ru/api"
 	arenaIndex = "matches.json"
 	arenaTable = "leaderboard.json"
 	// correctionSource - метка сверок этого импорта: повторный запуск заменяет их, а не копит.
 	correctionSource = "arcarena"
 )
-
-// Ник в источнике -> логин аккаунта: игрок записан иначе или уже есть под другим логином.
-var aliases = map[string]string{
-	"1STW00D":  "Istwood",
-	"JONNY_92": "J0NNY_92",
-	"KUNAYO":   "KUNAY0",
-	"MORES322": "M0RES322",
-}
-
-// Коды карт arcarena -> наши.
-var arenaMaps = map[string]string{
-	"stormy_flows":   "stormy_flows",
-	"blue_gates":     "blue_gate",
-	"buried_city":    "buried_city",
-	"spaceport":      "spaceport",
-	"battle_of_dam":  "dam",
-	"stellar_montis": "stella_montis",
-}
-
-var moscow = time.FixedZone("MSK", 3*3600)
-
-var nickJunk = regexp.MustCompile(`[^\p{L}\p{N}_\-\.]+`)
-
-// cleanNick убирает украшения вроде кубка чемпиона и приводит ник к логину аккаунта.
-func cleanNick(n string) string {
-	n = strings.TrimSpace(nickJunk.ReplaceAllString(strings.TrimSpace(n), " "))
-	n = strings.Join(strings.Fields(n), " ")
-	if a, ok := aliases[strings.ToUpper(n)]; ok {
-		return a
-	}
-	return n
-}
-
-func sameNick(a, b string) bool { return strings.EqualFold(cleanNick(a), cleanNick(b)) }
-
-// importRound - раунд матча с картой, заданиями и ручными очками сторон.
-type importRound struct {
-	Number  int
-	MapCode string
-	Tasks   []importTask
-	Manual  [2]int
-}
-
-type importTask struct {
-	Side      int // 0 - сторона A, 1 - B
-	Name      string
-	Text      string
-	Points    int
-	Category  string // task | protocol
-	MapCode   string
-	Completed bool
-}
-
-type importVeto struct {
-	Action  string
-	MapCode string
-	Round   int
-}
-
-// match - матч из любого источника в общем виде.
-type match struct {
-	ExtKey     string
-	Source     string
-	Date       time.Time
-	Day        string // дата по Москве, для склейки источников
-	A, B       string
-	WinA, Draw bool
-	Mult       int
-	Games      int     // сколько матчей засчитывает: ×2 таблицы - два
-	Pins       [2]*int // изменение MMR сторон с arcarena - берётся как есть
-	PlayerType string
-	Rounds     []importRound
-	Veto       []importVeto
-}
 
 func main() {
 	csvDir := flag.String("csv", "", "папка с листом таблицы")
@@ -178,27 +100,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("сезон: %v", err)
 	}
-	users := map[string]string{}
-	ensureUser := func(nick string) (string, error) {
-		login := cleanNick(nick)
-		key := strings.ToLower(login)
-		if id, ok := users[key]; ok {
-			return id, nil
-		}
-		if u, err := st.GetUserByLogin(ctx, login); err == nil {
-			users[key] = u.ID
-			return u.ID, nil
-		}
-		u, err := st.CreateUser(ctx, login, login, "!imported", models.RoleUser)
-		if err != nil {
-			return "", err
-		}
-		users[key] = u.ID
-		return u.ID, nil
-	}
-
+	im := matchimport.NewImporter(pool, st)
 	for _, m := range all {
-		if err := upsert(ctx, pool, st, m, seasonID, ensureUser); err != nil {
+		if err := im.Upsert(ctx, m, seasonID); err != nil {
 			log.Fatalf("матч %s: %v", m.ExtKey, err)
 		}
 	}
@@ -216,7 +120,7 @@ func main() {
 	} else if n > 0 {
 		log.Printf("удалено заглушек без матчей: %d", n)
 	}
-	log.Printf("ГОТОВО: матчей 3 сезона %d, игроков %d", len(all), len(users))
+	log.Printf("ГОТОВО: матчей 3 сезона %d, игроков %d", len(all), im.Players())
 }
 
 type arenaTableFile struct {
@@ -232,7 +136,7 @@ type arenaTableFile struct {
 
 // reconcile подгоняет рейтинг к таблице лидеров arcarena: на старте arcarena у каждого её стартовые
 // цифры (текущий MMR минус изменения за её матчи), разница с нашим счётом по таблице - сверка.
-func reconcile(ctx context.Context, pool *pgxpool.Pool, st *store.Store, dir, seasonID string, arena []match) error {
+func reconcile(ctx context.Context, pool *pgxpool.Pool, st *store.Store, dir, seasonID string, arena []matchimport.Match) error {
 	var tbl arenaTableFile
 	readJSON(filepath.Join(dir, arenaTable), &tbl)
 	if len(tbl.Entries) == 0 || tbl.Season.StartsAt.IsZero() {
@@ -244,7 +148,7 @@ func reconcile(ctx context.Context, pool *pgxpool.Pool, st *store.Store, dir, se
 	for _, m := range arena {
 		for side, nick := range []string{m.A, m.B} {
 			if m.Pins[side] != nil {
-				played[strings.ToLower(cleanNick(nick))] += *m.Pins[side]
+				played[strings.ToLower(matchimport.CleanNick(nick))] += *m.Pins[side]
 			}
 		}
 	}
@@ -254,7 +158,7 @@ func reconcile(ctx context.Context, pool *pgxpool.Pool, st *store.Store, dir, se
 	}
 	var items []store.MmrCorrection
 	for _, e := range tbl.Entries {
-		login := cleanNick(e.Nickname)
+		login := matchimport.CleanNick(e.Nickname)
 		u, err := st.GetUserByLogin(ctx, login)
 		if err != nil {
 			continue
@@ -285,7 +189,7 @@ func reconcile(ctx context.Context, pool *pgxpool.Pool, st *store.Store, dir, se
 	}
 	bad := 0
 	for _, e := range tbl.Entries {
-		u, err := st.GetUserByLogin(ctx, cleanNick(e.Nickname))
+		u, err := st.GetUserByLogin(ctx, matchimport.CleanNick(e.Nickname))
 		if err != nil || e.MatchesPlayed == 0 {
 			continue
 		}
@@ -318,7 +222,7 @@ func dropUnusedStubs(ctx context.Context, pool *pgxpool.Pool) (int64, error) {
 }
 
 // seasonFor - сезон, в который ложатся матчи: тот, чьи даты их покрывают (обычно текущий).
-func seasonFor(ctx context.Context, pool *pgxpool.Pool, all []match) (string, error) {
+func seasonFor(ctx context.Context, pool *pgxpool.Pool, all []matchimport.Match) (string, error) {
 	if len(all) == 0 {
 		return "", fmt.Errorf("нет матчей")
 	}
@@ -345,174 +249,9 @@ func fixImportedSeasons(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
-func upsert(ctx context.Context, pool *pgxpool.Pool, st *store.Store, m match, seasonID string, ensureUser func(string) (string, error)) error {
-	aID, err := ensureUser(m.A)
-	if err != nil {
-		return err
-	}
-	bID, err := ensureUser(m.B)
-	if err != nil {
-		return err
-	}
-	title := cleanNick(m.A) + " vs " + cleanNick(m.B)
-	maps := []string{}
-	for _, r := range m.Rounds {
-		if name := mapName(ctx, pool, r.MapCode); name != "" {
-			maps = append(maps, name)
-		}
-	}
-	mapsJSON, _ := json.Marshal(maps)
-
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	var tid string
-	err = tx.QueryRow(ctx, `SELECT id FROM tournaments WHERE ext_key = $1`, m.ExtKey).Scan(&tid)
-	if err == pgx.ErrNoRows {
-		err = tx.QueryRow(ctx, `
-			INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, games, ext_key, season_id)
-			VALUES ($1, '1x1', $2, 'finished', $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-			title, m.PlayerType, len(m.Rounds), string(mapsJSON), m.Date, m.Mult, max(m.Games, 1), m.ExtKey, seasonID).Scan(&tid)
-	} else if err == nil {
-		_, err = tx.Exec(ctx, `
-			UPDATE tournaments SET title=$2, player_type=$3, status='finished', total_rounds=$4, maps=$5, starts_at=$6,
-			       rating_multiplier=$7, games=$8, season_id=$9, winner_participant_id=NULL, updated_at=now()
-			WHERE id=$1`, tid, title, m.PlayerType, len(m.Rounds), string(mapsJSON), m.Date, m.Mult, max(m.Games, 1), seasonID)
-		if err == nil {
-			for _, q := range []string{`DELETE FROM participants WHERE tournament_id=$1`, `DELETE FROM rounds WHERE tournament_id=$1`,
-				`DELETE FROM match_veto WHERE tournament_id=$1`} {
-				if _, err = tx.Exec(ctx, q, tid); err != nil {
-					break
-				}
-			}
-		}
-	}
-	if err != nil {
-		return err
-	}
-
-	pids := [2]string{}
-	for i, side := range []struct {
-		name, uid string
-	}{{cleanNick(m.A), aID}, {cleanNick(m.B), bID}} {
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO participants (tournament_id, kind, user_id, name, seed, mmr_delta) VALUES ($1, 'player', $2, $3, $4, $5) RETURNING id`,
-			tid, side.uid, side.name, i+1, m.Pins[i]).Scan(&pids[i]); err != nil {
-			return err
-		}
-	}
-	if !m.Draw {
-		winner := pids[0]
-		if !m.WinA {
-			winner = pids[1]
-		}
-		if _, err := tx.Exec(ctx, `UPDATE tournaments SET winner_participant_id=$2 WHERE id=$1`, tid, winner); err != nil {
-			return err
-		}
-	}
-	for _, r := range m.Rounds {
-		var rid string
-		var code *string
-		if r.MapCode != "" {
-			c := r.MapCode
-			code = &c
-		}
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO rounds (tournament_id, number, map, map_code, status)
-			VALUES ($1, $2, COALESCE((SELECT name FROM maps WHERE code = $3), ''), $3, 'finished') RETURNING id`,
-			tid, r.Number, code).Scan(&rid); err != nil {
-			return err
-		}
-		for side, pts := range r.Manual {
-			if pts > 0 {
-				if _, err := tx.Exec(ctx, `INSERT INTO round_entries (round_id, participant_id, points) VALUES ($1, $2, $3)`,
-					rid, pids[side], pts); err != nil {
-					return err
-				}
-			}
-		}
-		for _, t := range r.Tasks {
-			taskID, err := catalogTask(ctx, tx, t)
-			if err != nil {
-				return err
-			}
-			var done *string
-			if t.Completed {
-				done = &pids[t.Side]
-			}
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO round_bonus_tasks (round_id, participant_id, task_id, completed_by) VALUES ($1, $2, $3, $4)
-				ON CONFLICT (round_id, participant_id, task_id) DO NOTHING`, rid, pids[t.Side], taskID, done); err != nil {
-				return err
-			}
-		}
-	}
-	sides := []string{"A", "B", "A", "B", "A", ""}
-	for i, v := range m.Veto {
-		side := ""
-		if len(m.Veto) == len(sides) {
-			side = sides[i]
-		}
-		var round *int
-		if v.Round > 0 {
-			r := v.Round
-			round = &r
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO match_veto (tournament_id, seq, action, side, map_code, round_number) VALUES ($1, $2, $3, $4, $5, $6)`,
-			tid, i+1, v.Action, side, v.MapCode, round); err != nil {
-			return err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	for _, p := range pids {
-		if _, err := st.RecomputeParticipantPoints(ctx, p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func mapName(ctx context.Context, pool *pgxpool.Pool, code string) string {
-	var name string
-	_ = pool.QueryRow(ctx, `SELECT name FROM maps WHERE code = $1`, code).Scan(&name)
-	return name
-}
-
-// catalogTask находит задание в каталоге по названию (и карте); задания, которых в каталоге нет,
-// добавляются выключенными - только для истории матчей.
-func catalogTask(ctx context.Context, tx pgx.Tx, t importTask) (string, error) {
-	var id string
-	err := tx.QueryRow(ctx, `
-		SELECT id FROM catalog_tasks
-		WHERE lower(name) = lower($1) AND category = $2 AND COALESCE(map_code, '') = $3
-		ORDER BY (kind = 'pvp') DESC, active DESC LIMIT 1`, t.Name, t.Category, t.MapCode).Scan(&id)
-	if err == nil {
-		return id, nil
-	}
-	if err != pgx.ErrNoRows {
-		return "", err
-	}
-	var code *string
-	if t.MapCode != "" {
-		c := t.MapCode
-		code = &c
-	}
-	err = tx.QueryRow(ctx, `
-		INSERT INTO catalog_tasks (name, text, points, value_type, kind, source, category, map_code, active, sort_order)
-		VALUES ($1, $2, $3, 'fixed', 'pvp', 'official', $4, $5, false, 5000) RETURNING id`,
-		t.Name, t.Text, t.Points, t.Category, code).Scan(&id)
-	return id, err
-}
-
 // ---------- таблица ----------
 
-func sheetMatches(path string) []match {
+func sheetMatches(path string) []matchimport.Match {
 	rows := readCSV(path)
 	type row struct {
 		n                          int
@@ -530,14 +269,14 @@ func sheetMatches(path string) []match {
 		list = append(list, row{n, strings.TrimSpace(r[2]), strings.ToLower(strings.TrimSpace(r[3])),
 			strings.TrimSpace(r[4]), strings.TrimSpace(r[5]), strings.TrimSpace(r[6]), strings.TrimSpace(r[7])})
 	}
-	var out []match
+	var out []matchimport.Match
 	for i := 0; i < len(list); i++ {
 		r := list[i]
 		mult := 1
 		if i+1 < len(list) {
 			nx := list[i+1]
-			samePair := (sameNick(nx.a, r.a) && sameNick(nx.b, r.b)) || (sameNick(nx.a, r.b) && sameNick(nx.b, r.a))
-			if nx.day == r.day && samePair && strings.EqualFold(nx.mp, r.mp) && sameNick(nx.win, r.win) {
+			samePair := (matchimport.SameNick(nx.a, r.a) && matchimport.SameNick(nx.b, r.b)) || (matchimport.SameNick(nx.a, r.b) && matchimport.SameNick(nx.b, r.a))
+			if nx.day == r.day && samePair && strings.EqualFold(nx.mp, r.mp) && matchimport.SameNick(nx.win, r.win) {
 				mult = 2
 				i++
 			}
@@ -547,11 +286,11 @@ func sheetMatches(path string) []match {
 		if r.format == "pve" {
 			pt = "pve"
 		}
-		out = append(out, match{
-			ExtKey: fmt.Sprintf("s3sheet|%d|%s|%s|%s", r.n, r.day, strings.ToUpper(cleanNick(r.a)), strings.ToUpper(cleanNick(r.b))),
-			Source: "таблица", Date: date, Day: date.In(moscow).Format("2006-01-02"),
-			A: r.a, B: r.b, WinA: sameNick(r.win, r.a), Draw: r.win == "", Mult: mult, Games: mult, PlayerType: pt,
-			Rounds: []importRound{{Number: 1, MapCode: mapCodeByName(r.mp)}},
+		out = append(out, matchimport.Match{
+			ExtKey: fmt.Sprintf("s3sheet|%d|%s|%s|%s", r.n, r.day, strings.ToUpper(matchimport.CleanNick(r.a)), strings.ToUpper(matchimport.CleanNick(r.b))),
+			Source: "таблица", Date: date, Day: date.In(matchimport.Moscow).Format("2006-01-02"),
+			A: r.a, B: r.b, WinA: matchimport.SameNick(r.win, r.a), Draw: r.win == "", Mult: mult, Games: mult, PlayerType: pt,
+			Rounds: []matchimport.Round{{Number: 1, MapCode: mapCodeByName(r.mp)}},
 		})
 	}
 	return out
@@ -582,142 +321,29 @@ func sheetDate(s string) time.Time {
 		d, e1 := strconv.Atoi(parts[0])
 		m, e2 := strconv.Atoi(parts[1])
 		if e1 == nil && e2 == nil {
-			return time.Date(2026, time.Month(m), d, 15, 0, 0, 0, moscow)
+			return time.Date(2026, time.Month(m), d, 15, 0, 0, 0, matchimport.Moscow)
 		}
 	}
-	return time.Date(2026, 8, 17, 15, 0, 0, 0, moscow)
+	return time.Date(2026, 8, 17, 15, 0, 0, 0, matchimport.Moscow)
 }
 
 // ---------- arcarena ----------
 
-type arenaParticipant struct {
-	Nickname  string `json:"nickname"`
-	MmrChange *int   `json:"mmrChange"`
-}
-
-type arenaMatch struct {
-	ID               string     `json:"id"`
-	Mode             string     `json:"mode"`
-	RoundCount       int        `json:"roundCount"`
-	RatingMultiplier int        `json:"ratingMultiplier"`
-	Status           string     `json:"status"`
-	StartedAt        *time.Time `json:"startedAt"`
-	FinishedAt       *time.Time `json:"finishedAt"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	Sides            []struct {
-		Side         string             `json:"side"`
-		Score        int                `json:"score"`
-		Participants []arenaParticipant `json:"participants"`
-	} `json:"sides"`
-}
-
-type arenaLive struct {
-	Rounds []struct {
-		RoundNumber int `json:"roundNumber"`
-		Map         *struct {
-			Code string `json:"code"`
-		} `json:"map"`
-		Score map[string]int `json:"score"`
-		Tasks map[string][]struct {
-			Name          string `json:"name"`
-			Description   string `json:"description"`
-			Points        int    `json:"points"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			PointsAwarded int    `json:"pointsAwarded"`
-		} `json:"tasks"`
-	} `json:"rounds"`
-}
-
-type arenaVeto struct {
-	Actions []struct {
-		MapCode     string `json:"mapCode"`
-		Action      string `json:"action"`
-		RoundNumber *int   `json:"roundNumber"`
-	} `json:"actions"`
-}
-
-func arenaMatches(dir string) []match {
+func arenaMatches(dir string) []matchimport.Match {
 	var idx struct {
-		Matches []arenaMatch `json:"matches"`
+		Matches []matchimport.ArenaMatch `json:"matches"`
 	}
 	readJSON(filepath.Join(dir, arenaIndex), &idx)
-	var out []match
+	var out []matchimport.Match
 	for _, am := range idx.Matches {
-		if am.Status != "finished" || am.Mode != "1v1" || len(am.Sides) != 2 ||
-			len(am.Sides[0].Participants) != 1 || len(am.Sides[1].Participants) != 1 {
+		if !am.Importable() {
 			continue
 		}
-		var live arenaLive
-		var veto arenaVeto
+		var live matchimport.ArenaLive
+		var veto matchimport.ArenaVeto
 		readJSON(filepath.Join(dir, "live_"+am.ID+".json"), &live)
 		readJSON(filepath.Join(dir, "veto_"+am.ID+".json"), &veto)
-
-		pa, pb := am.Sides[0].Participants[0], am.Sides[1].Participants[0]
-		when := am.CreatedAt
-		if am.StartedAt != nil {
-			when = *am.StartedAt
-		}
-		m := match{
-			ExtKey: "arena|" + am.ID, Source: "arcarena", Date: when, Day: when.In(moscow).Format("2006-01-02"),
-			A: pa.Nickname, B: pb.Nickname, Mult: max(am.RatingMultiplier, 1), Games: 1, PlayerType: "pvp",
-			Pins: [2]*int{pa.MmrChange, pb.MmrChange},
-		}
-		switch {
-		case pa.MmrChange != nil && *pa.MmrChange > 0:
-			m.WinA = true
-		case pb.MmrChange != nil && *pb.MmrChange > 0:
-			m.WinA = false
-		case am.Sides[0].Score != am.Sides[1].Score:
-			m.WinA = am.Sides[0].Score > am.Sides[1].Score
-		default:
-			m.Draw = true
-		}
-		for _, lr := range live.Rounds {
-			r := importRound{Number: lr.RoundNumber}
-			if lr.Map != nil {
-				r.MapCode = arenaMaps[lr.Map.Code]
-			}
-			for side, key := range []string{"A", "B"} {
-				taskPts := 0
-				for _, t := range lr.Tasks[key] {
-					it := importTask{Side: side, Name: t.Name, Text: t.Description, Points: t.Points, Completed: t.Status == "completed"}
-					switch t.Type {
-					case "universal_1":
-						it.Category = "protocol"
-					case "map":
-						it.Category, it.MapCode = "task", r.MapCode
-					default:
-						it.Category = "task"
-					}
-					if it.Completed {
-						taskPts += t.Points
-					}
-					r.Tasks = append(r.Tasks, it)
-				}
-				if manual := lr.Score[key] - taskPts; manual > 0 {
-					r.Manual[side] = manual
-				}
-			}
-			m.Rounds = append(m.Rounds, r)
-		}
-		if len(m.Rounds) == 0 {
-			m.Rounds = []importRound{{Number: 1}}
-		}
-		for i, a := range veto.Actions {
-			v := importVeto{Action: a.Action, MapCode: arenaMaps[a.MapCode]}
-			if a.RoundNumber != nil {
-				v.Round = *a.RoundNumber
-			}
-			// В порядке 3 сезона последний ход - оставшаяся карта, а не выбор стороны.
-			if len(veto.Actions) == 6 && i == 5 {
-				v.Action = "rest"
-			}
-			if v.MapCode != "" {
-				m.Veto = append(m.Veto, v)
-			}
-		}
-		out = append(out, m)
+		out = append(out, matchimport.FromArena(am, live, veto))
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Date.Before(out[j].Date) })
 	return out
@@ -725,9 +351,9 @@ func arenaMatches(dir string) []match {
 
 // merge склеивает источники: матч из таблицы, который есть и на arcarena (тот же день, те же
 // игроки и победитель), берётся с arcarena.
-func merge(sheet, arena []match) ([]match, int) {
+func merge(sheet, arena []matchimport.Match) ([]matchimport.Match, int) {
 	used := make([]bool, len(arena))
-	var out []match
+	var out []matchimport.Match
 	dropped := 0
 	for _, s := range sheet {
 		dup := false
@@ -735,7 +361,7 @@ func merge(sheet, arena []match) ([]match, int) {
 			if used[i] || a.Day != s.Day {
 				continue
 			}
-			samePair := (sameNick(a.A, s.A) && sameNick(a.B, s.B)) || (sameNick(a.A, s.B) && sameNick(a.B, s.A))
+			samePair := (matchimport.SameNick(a.A, s.A) && matchimport.SameNick(a.B, s.B)) || (matchimport.SameNick(a.A, s.B) && matchimport.SameNick(a.B, s.A))
 			if !samePair {
 				continue
 			}
@@ -746,7 +372,7 @@ func merge(sheet, arena []match) ([]match, int) {
 			if a.WinA {
 				winA = a.A
 			}
-			if sameNick(winS, winA) {
+			if matchimport.SameNick(winS, winA) {
 				used[i], dup = true, true
 				break
 			}
@@ -764,29 +390,11 @@ func merge(sheet, arena []match) ([]match, int) {
 
 // ---------- загрузка ----------
 
-func get(url string) ([]byte, error) {
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (respect-import)")
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
-	}
-	return body, nil
-}
-
 func fetchSheet(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	body, err := get(fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/gviz/tq?tqx=out:csv&headers=0&gid=%s", sheetID, sheetGID))
+	body, err := matchimport.Get(fmt.Sprintf("https://docs.google.com/spreadsheets/d/%s/gviz/tq?tqx=out:csv&headers=0&gid=%s", sheetID, sheetGID))
 	if err != nil {
 		return err
 	}
@@ -797,14 +405,14 @@ func fetchArena(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	body, err := get(arenaAPI + "/matches")
+	body, err := matchimport.Get(matchimport.ArenaAPI + "/matches")
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(dir, arenaIndex), body, 0o644); err != nil {
 		return err
 	}
-	table, err := get(arenaAPI + "/leaderboard")
+	table, err := matchimport.Get(matchimport.ArenaAPI + "/leaderboard")
 	if err != nil {
 		return err
 	}
@@ -812,7 +420,7 @@ func fetchArena(dir string) error {
 		return err
 	}
 	var idx struct {
-		Matches []arenaMatch `json:"matches"`
+		Matches []matchimport.ArenaMatch `json:"matches"`
 	}
 	if err := json.Unmarshal(body, &idx); err != nil {
 		return err
@@ -822,7 +430,7 @@ func fetchArena(dir string) error {
 			continue
 		}
 		for _, part := range []string{"live", "veto"} {
-			b, err := get(arenaAPI + "/matches/" + m.ID + "/" + part)
+			b, err := matchimport.Get(matchimport.ArenaAPI + "/matches/" + m.ID + "/" + part)
 			if err != nil {
 				return err
 			}
