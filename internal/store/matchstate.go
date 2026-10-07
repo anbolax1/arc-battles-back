@@ -120,6 +120,9 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 	if st.Log, err = s.ListMatchLog(ctx, tournamentID, 50); err != nil {
 		return st, err
 	}
+	if st.Patches, err = s.MatchPatches(ctx, tournamentID); err != nil {
+		return st, err
+	}
 
 	// Ручные очки с ноками (и основные задания матчей старого пульта) - по раундам.
 	manual := map[int]map[string]int{}

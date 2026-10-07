@@ -147,6 +147,9 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 		// Явный победитель → турнир завершён → пересчитываем MMR.
 		_ = s.Store.ApplyTournamentMmr(r.Context(), id)
 	}
+	if body.Status != nil || body.WinnerParticipantID != nil {
+		s.syncPatches(r.Context())
+	}
 	t, err := s.Store.GetTournament(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "турнир не найден")
@@ -169,6 +172,7 @@ func (s *Server) handleDeleteTournament(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.Media.Remove(preview)
+	s.syncPatches(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
 

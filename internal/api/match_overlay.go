@@ -130,6 +130,9 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 		ShowStandings:  stored.ShowStandings,
 		Layout:         stored.Layout,
 	}
+	if stored.TournamentID != nil && *stored.TournamentID == t.ID {
+		ls.PatchFlashes = stored.PatchFlashes
+	}
 	for _, r := range t.Rounds {
 		if r.Number == round {
 			ls.CurrentMap = r.Map

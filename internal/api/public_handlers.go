@@ -75,6 +75,14 @@ func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
 		for i := range players {
 			players[i].Tags = tags[players[i].UserID]
 		}
+		// Нашивки - за сезон, поэтому в таблице «за всё время» их нет. Без нашивок таблица всё равно нужна.
+		if seasonID != "" {
+			if tops, counts, err := s.Store.SeasonPatchTops(r.Context(), seasonID); err == nil {
+				for i := range players {
+					players[i].Patches, players[i].PatchCount = tops[players[i].UserID], counts[players[i].UserID]
+				}
+			}
+		}
 		rows = players
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"mode": mode, "seasonId": seasonID, "rows": rows})

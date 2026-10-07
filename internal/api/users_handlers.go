@@ -165,6 +165,10 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 	// Расширенная статистика 1×1 (по истории MMR) + аналитика + команды игрока.
 	mmr1x1, timeline, analytics, _ := s.Store.PlayerStatsBundle(r.Context(), u.ID)
 	teams, _ := s.Store.TeamsForUser(r.Context(), u.ID)
+	patches, err := s.Store.PlayerPatches(r.Context(), u.ID)
+	if err != nil {
+		patches = map[string]models.PatchSeason{}
+	}
 	writeJSON(w, http.StatusOK, models.PlayerProfile{
 		User:        u,
 		MmrSolo:     mmrSolo,
@@ -178,5 +182,6 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		Timeline:    timeline,
 		Analytics:   analytics,
 		Teams:       teams,
+		Patches:     patches,
 	})
 }

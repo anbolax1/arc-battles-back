@@ -74,6 +74,8 @@ func (s *Server) handleStartSeason(w http.ResponseWriter, r *http.Request) {
 	}
 	// Новый сезон - рейтинг у всех с нуля: кэш MMR переключается на него.
 	_ = s.Store.RefreshMmrCaches(r.Context())
+	// Прошлый сезон закрыт: его итоговые нашивки закрепляются.
+	s.syncPatches(r.Context())
 	writeJSON(w, http.StatusCreated, sn)
 }
 

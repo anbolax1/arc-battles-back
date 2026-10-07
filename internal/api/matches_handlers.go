@@ -457,6 +457,7 @@ func (s *Server) handleFinishMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.flashPatches(r.Context(), id, s.syncPatches(r.Context()))
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
@@ -472,6 +473,7 @@ func (s *Server) handleCancelMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Media.Remove(preview)
+	s.syncPatches(r.Context())
 	if env, err := s.stateEnvelope(s.overlayStateBytes(r.Context())); err == nil {
 		s.Hub.Broadcast(env)
 	}
@@ -699,6 +701,7 @@ func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "knock", names[pid]+": "+text, applied*store.KnockPoints, map[string]any{
 			"type": "knock", "roundId": rd.ID, "participantId": pid, "applied": applied,
 		})
+		s.flashPatches(r.Context(), id, s.syncPatches(r.Context()))
 	}
 	s.writeMatch(w, r, id, http.StatusOK)
 }
@@ -770,5 +773,6 @@ func (s *Server) handleMatchUndo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recomputeMany(r, affected)
+	s.syncPatches(r.Context())
 	s.writeMatch(w, r, id, http.StatusOK)
 }

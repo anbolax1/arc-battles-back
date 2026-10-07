@@ -160,6 +160,7 @@ type MatchState struct {
 	Manual       []RoundScore          `json:"manual"` // вместе с очками за ноки
 	Knocks       []RoundKnocks         `json:"knocks"`
 	Log          []MatchLogEntry       `json:"log"`
+	Patches      []MatchPatch          `json:"patches"` // нашивки, полученные в этом матче
 }
 
 // Matchup - противостояние сторон для страницы матча: рейтинг, что стоит на кону, личные встречи.
@@ -317,9 +318,11 @@ type LeaderboardRow struct {
 	Mmr         int       `json:"mmr"`    // рейтинг по исходам (старт 1000, сквозной по сезонам)
 	Points      int       `json:"points"` // сумма набранных баллов за сезон (вторично, для контекста)
 	Wins        int       `json:"wins"`
-	Losses      int       `json:"losses"`         // без ничьих
-	Tournaments int       `json:"tournaments"`    // матчей, вместе с ничьими
-	Tags        []UserTag `json:"tags,omitempty"` // теги, видные на сайте
+	Losses      int       `json:"losses"`               // без ничьих
+	Tournaments int       `json:"tournaments"`          // матчей, вместе с ничьими
+	Tags        []UserTag `json:"tags,omitempty"`       // теги, видные на сайте
+	Patches     []string  `json:"patches,omitempty"`    // самые редкие нашивки сезона, до трёх
+	PatchCount  int       `json:"patchCount,omitempty"` // всего нашивок в сезоне
 }
 
 // TeamMember — игрок в составе команды 2×2 (для командного лидерборда).
@@ -468,6 +471,7 @@ type PlayerProfile struct {
 	Timeline  []MmrPoint                 `json:"timeline1x1"`  // динамика MMR 1×1 (для графика)
 	Analytics map[string]SeasonAnalytics `json:"analytics1x1"` // по картам и соперникам; ключ - сезон, пусто - вне сезонов
 	Teams     []TeamSummary              `json:"teams"`        // команды 2×2, где состоит игрок
+	Patches   map[string]PatchSeason     `json:"patches1x1"`   // нашивки по сезонам; ключ - сезон
 }
 
 // SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам и ноки игрока.
@@ -485,6 +489,66 @@ type KnockStats struct {
 	Best         int    `json:"best"` // больше всего ноков за один матч
 	BestMatch    string `json:"bestMatch,omitempty"`
 	BestOpponent string `json:"bestOpponent,omitempty"`
+}
+
+// PlayerPatch - нашивка игрока за сезон. Detail - подробности для подписи: соперник и счёт, число раз,
+// лучший рейд; набор полей свой у каждой нашивки.
+type PlayerPatch struct {
+	SeasonID    string          `json:"seasonId"`
+	Code        string          `json:"code"`
+	Tier        int             `json:"tier"`
+	MatchID     *string         `json:"matchId,omitempty"`
+	EarnedAt    time.Time       `json:"earnedAt"`
+	Provisional bool            `json:"provisional,omitempty"` // сезон идёт: закрепится при его закрытии
+	Detail      json.RawMessage `json:"detail"`
+	Holders     int             `json:"holders"` // сколько рейдеров сезона носят эту нашивку
+}
+
+// PatchSeason - нашивки игрока за сезон; Players - сколько рейдеров играло в сезоне, от него редкость.
+type PatchSeason struct {
+	Players int           `json:"players"`
+	Final   bool          `json:"final"` // сезон закрыт
+	Items   []PlayerPatch `json:"items"`
+}
+
+// PatchCatalog - все нашивки сезона: сколько рейдеров их носят и кто.
+type PatchCatalog struct {
+	Season  Season      `json:"season"`
+	Players int         `json:"players"`
+	Patches []PatchStat `json:"patches"`
+}
+
+// PatchStat - одна нашивка в каталоге. Tiers - сколько рейдеров на каждой ступени, начиная с первой.
+type PatchStat struct {
+	Code    string        `json:"code"`
+	Holders int           `json:"holders"`
+	Tiers   []int         `json:"tiers,omitempty"`
+	Top     []PatchHolder `json:"top"` // по месту в таблице сезона
+}
+
+// PatchHolder - владелец нашивки в каталоге.
+type PatchHolder struct {
+	Login       string `json:"login"`
+	DisplayName string `json:"displayName"`
+	Tier        int    `json:"tier"`
+	Provisional bool   `json:"provisional,omitempty"`
+}
+
+// MatchPatch - нашивка, полученная стороной в этом матче.
+type MatchPatch struct {
+	ParticipantID string          `json:"participantId"`
+	Code          string          `json:"code"`
+	Tier          int             `json:"tier"`
+	Detail        json.RawMessage `json:"detail"`
+}
+
+// PatchFlash - нашивка, полученная в идущем матче: оверлей показывает её плашкой несколько секунд.
+type PatchFlash struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Code   string          `json:"code"`
+	Tier   int             `json:"tier"`
+	Detail json.RawMessage `json:"detail"`
 }
 
 // Highlight — пользовательский хайлайт (твич-клип, скачанный к нам, или загруженный файл).
@@ -655,6 +719,9 @@ type LiveState struct {
 	// организатором переживал round-trip через json.Marshal(LiveState), поле должно
 	// присутствовать в структуре.
 	Layout *OverlayLayout `json:"layout,omitempty"`
+
+	// Нашивки, полученные в идущем матче: оверлей показывает каждую новую плашкой по очереди.
+	PatchFlashes []PatchFlash `json:"patchFlashes,omitempty"`
 }
 
 // OverlayLayout — документ раскладки оверлея: набор независимых виджетов с

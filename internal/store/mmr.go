@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -537,7 +538,14 @@ func (s *Store) RecomputeAllMmr(ctx context.Context) error {
 			return err
 		}
 	}
-	return s.RefreshMmrCaches(ctx)
+	if err := s.RefreshMmrCaches(ctx); err != nil {
+		return err
+	}
+	// Нашивки судят по рейтингу до матча: после пересчёта MMR пересчитываются и они.
+	if _, err := s.SyncPatches(ctx); err != nil {
+		return fmt.Errorf("нашивки: %w", err)
+	}
+	return nil
 }
 
 // RunPendingRecompute пересчитывает MMR, если миграция поставила флаг (сменились правила подсчёта).
