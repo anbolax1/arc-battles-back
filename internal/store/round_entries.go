@@ -65,6 +65,9 @@ func (s *Store) ListRoundEntries(ctx context.Context, roundID string) ([]models.
 // задание противника - ContractCrossPoints.
 const ContractCrossPoints = 1
 
+// KnockPoints - очки за нок рейдера: они входят в ручные очки раунда, а сами ноки идут отдельным счётчиком.
+const KnockPoints = 3
+
 // PointsBreakdown — разложение очков участника по источникам (единый источник формулы для
 // пересчёта total_points и для статистики профиля). Новая концепция: протоколы НЕ влияют на
 // очки (штраф = минуты в рейде), процентных наград нет.

@@ -612,6 +612,21 @@ func (s *Server) participantNames(r *http.Request, tournamentID string) map[stri
 	return out
 }
 
+// liveSide - идущий раунд и имена сторон матча; если раунд не идёт или сторона чужая, отвечает ошибкой.
+func (s *Server) liveSide(w http.ResponseWriter, r *http.Request, tournamentID, participantID string) (models.Round, map[string]string, bool) {
+	rd, ok := s.liveRound(r, tournamentID)
+	if !ok {
+		writeError(w, http.StatusConflict, "раунд не идёт")
+		return rd, nil, false
+	}
+	names := s.participantNames(r, tournamentID)
+	if _, ok := names[participantID]; !ok {
+		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
+		return rd, nil, false
+	}
+	return rd, names, true
+}
+
 // POST /api/tournaments/{id}/points {participantId, delta, label} - ручные очки за идущий раунд.
 func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -627,14 +642,8 @@ func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "укажите сторону и очки")
 		return
 	}
-	rd, ok := s.liveRound(r, id)
+	rd, names, ok := s.liveSide(w, r, id, b.ParticipantID)
 	if !ok {
-		writeError(w, http.StatusConflict, "раунд не идёт")
-		return
-	}
-	names := s.participantNames(r, id)
-	if _, ok := names[b.ParticipantID]; !ok {
-		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
 		return
 	}
 	applied, err := s.Store.AdjustRoundPoints(r.Context(), rd.ID, b.ParticipantID, b.Delta)
@@ -651,6 +660,44 @@ func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 		pid := b.ParticipantID
 		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "points", names[pid]+": "+label, applied, map[string]any{
 			"type": "points", "roundId": rd.ID, "participantId": pid, "applied": applied,
+		})
+	}
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
+// POST /api/tournaments/{id}/knocks {participantId, delta: 1|-1} - нок стороне в идущем раунде или
+// снять ошибочный.
+func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !s.matchGuard(w, r, id) {
+		return
+	}
+	var b struct {
+		ParticipantID string `json:"participantId"`
+		Delta         int    `json:"delta"`
+	}
+	if err := readJSON(r, &b); err != nil || b.ParticipantID == "" || (b.Delta != 1 && b.Delta != -1) {
+		writeError(w, http.StatusBadRequest, "укажите сторону и нок")
+		return
+	}
+	rd, names, ok := s.liveSide(w, r, id, b.ParticipantID)
+	if !ok {
+		return
+	}
+	applied, err := s.Store.AdjustKnocks(r.Context(), rd.ID, b.ParticipantID, b.Delta)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if applied != 0 {
+		s.recomputeMany(r, []string{b.ParticipantID})
+		text := "нок"
+		if applied < 0 {
+			text = "нок снят"
+		}
+		pid := b.ParticipantID
+		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "knock", names[pid]+": "+text, applied*store.KnockPoints, map[string]any{
+			"type": "knock", "roundId": rd.ID, "participantId": pid, "applied": applied,
 		})
 	}
 	s.writeMatch(w, r, id, http.StatusOK)

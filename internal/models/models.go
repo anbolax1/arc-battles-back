@@ -126,7 +126,7 @@ type MatchLogEntry struct {
 	ID            string    `json:"id"`
 	RoundNumber   int       `json:"roundNumber"`
 	ParticipantID *string   `json:"participantId,omitempty"`
-	Kind          string    `json:"kind"` // task | points | legendary
+	Kind          string    `json:"kind"` // task | points | knock | legendary
 	Text          string    `json:"text"`
 	Delta         int       `json:"delta"`
 	CreatedAt     time.Time `json:"createdAt"`
@@ -139,6 +139,13 @@ type RoundScore struct {
 	Points        int    `json:"points"`
 }
 
+// RoundKnocks - сколько ноков у стороны за раунд.
+type RoundKnocks struct {
+	RoundNumber   int    `json:"roundNumber"`
+	ParticipantID string `json:"participantId"`
+	Knocks        int    `json:"knocks"`
+}
+
 // MatchState - всё о матче одним ответом: шапка, пики-баны, задания, очки по раундам и журнал.
 type MatchState struct {
 	Tournament   Tournament            `json:"tournament"`
@@ -149,7 +156,8 @@ type MatchState struct {
 	Tasks        []RoundBonusTask      `json:"tasks"`
 	Legendary    []LegendaryCompletion `json:"legendary"`
 	Scores       []RoundScore          `json:"scores"`
-	Manual       []RoundScore          `json:"manual"`
+	Manual       []RoundScore          `json:"manual"` // вместе с очками за ноки
+	Knocks       []RoundKnocks         `json:"knocks"`
 	Log          []MatchLogEntry       `json:"log"`
 }
 

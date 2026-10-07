@@ -40,12 +40,13 @@ func CleanNick(n string) string {
 
 func SameNick(a, b string) bool { return strings.EqualFold(CleanNick(a), CleanNick(b)) }
 
-// Round - раунд матча с картой, заданиями и ручными очками сторон.
+// Round - раунд матча с картой, заданиями, ручными очками и ноками сторон.
 type Round struct {
 	Number  int
 	MapCode string
 	Tasks   []Task
-	Manual  [2]int
+	Manual  [2]int // вместе с очками за ноки
+	Knocks  [2]int
 }
 
 type Task struct {
@@ -198,8 +199,8 @@ func (im *Importer) Upsert(ctx context.Context, m Match, seasonID string) error 
 		}
 		for side, pts := range r.Manual {
 			if pts > 0 {
-				if _, err := tx.Exec(ctx, `INSERT INTO round_entries (round_id, participant_id, points) VALUES ($1, $2, $3)`,
-					rid, pids[side], pts); err != nil {
+				if _, err := tx.Exec(ctx, `INSERT INTO round_entries (round_id, participant_id, points, knocks) VALUES ($1, $2, $3, $4)`,
+					rid, pids[side], pts, r.Knocks[side]); err != nil {
 					return err
 				}
 			}

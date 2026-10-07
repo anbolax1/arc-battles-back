@@ -473,26 +473,53 @@ func (s *Store) FinishMatch(ctx context.Context, tournamentID string) (models.To
 	return s.GetTournament(ctx, tournamentID)
 }
 
-// AdjustRoundPoints добавляет стороне ручные очки за раунд (нок рейдера и т.п.); ручные очки не
-// уходят ниже нуля, поэтому фактическое изменение может быть меньше запрошенного.
+// AdjustRoundPoints добавляет стороне ручные очки за раунд; поправка не съедает очки за ноки, поэтому
+// фактическое изменение может быть меньше запрошенного.
 func (s *Store) AdjustRoundPoints(ctx context.Context, roundID, participantID string, delta int) (int, error) {
-	var before int
-	err := s.Pool.QueryRow(ctx,
-		`SELECT points FROM round_entries WHERE round_id = $1 AND participant_id = $2`, roundID, participantID).Scan(&before)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	points, knocks, err := s.roundEntryCounts(ctx, roundID, participantID)
+	if err != nil {
 		return 0, err
 	}
-	after := before + delta
-	if after < 0 {
-		after = 0
-	}
-	if _, err := s.Pool.Exec(ctx, `
-		INSERT INTO round_entries (round_id, participant_id, points) VALUES ($1, $2, $3)
-		ON CONFLICT (round_id, participant_id) DO UPDATE SET points = EXCLUDED.points, updated_at = now()`,
-		roundID, participantID, after); err != nil {
+	after := max(points+delta, knocks*KnockPoints)
+	if err := s.saveRoundEntryCounts(ctx, roundID, participantID, after, knocks); err != nil {
 		return 0, err
 	}
-	return after - before, nil
+	return after - points, nil
+}
+
+// AdjustKnocks засчитывает стороне нок за раунд вместе с его очками или снимает ошибочный; ноков не
+// бывает меньше нуля, поэтому фактическое изменение может быть меньше запрошенного.
+func (s *Store) AdjustKnocks(ctx context.Context, roundID, participantID string, delta int) (int, error) {
+	points, knocks, err := s.roundEntryCounts(ctx, roundID, participantID)
+	if err != nil {
+		return 0, err
+	}
+	applied := max(knocks+delta, 0) - knocks
+	if applied == 0 {
+		return 0, nil
+	}
+	if err := s.saveRoundEntryCounts(ctx, roundID, participantID, max(points+applied*KnockPoints, 0), knocks+applied); err != nil {
+		return 0, err
+	}
+	return applied, nil
+}
+
+func (s *Store) roundEntryCounts(ctx context.Context, roundID, participantID string) (points, knocks int, err error) {
+	err = s.Pool.QueryRow(ctx,
+		`SELECT points, knocks FROM round_entries WHERE round_id = $1 AND participant_id = $2`, roundID, participantID).
+		Scan(&points, &knocks)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = nil
+	}
+	return points, knocks, err
+}
+
+func (s *Store) saveRoundEntryCounts(ctx context.Context, roundID, participantID string, points, knocks int) error {
+	_, err := s.Pool.Exec(ctx, `
+		INSERT INTO round_entries (round_id, participant_id, points, knocks) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (round_id, participant_id) DO UPDATE SET points = EXCLUDED.points, knocks = EXCLUDED.knocks, updated_at = now()`,
+		roundID, participantID, points, knocks)
+	return err
 }
 
 // ListMatchPlayers - игроки для выбора сторон: MMR и счёт в текущем сезоне, сыгравшие сверху.

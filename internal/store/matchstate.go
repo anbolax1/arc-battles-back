@@ -79,6 +79,11 @@ func (s *Store) UndoLastMatchLog(ctx context.Context, tournamentID string) ([]st
 			return nil, err
 		}
 		affected = append(affected, u.ParticipantID)
+	case "knock":
+		if _, err := s.AdjustKnocks(ctx, u.RoundID, u.ParticipantID, -u.Applied); err != nil {
+			return nil, err
+		}
+		affected = append(affected, u.ParticipantID)
 	case "legendary":
 		pid, err := s.UncompleteLegendary(ctx, u.LegendaryID)
 		if err != nil {
@@ -116,8 +121,9 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 		return st, err
 	}
 
-	// Ручные очки (и основные задания матчей старого пульта) - по раундам.
+	// Ручные очки с ноками (и основные задания матчей старого пульта) - по раундам.
 	manual := map[int]map[string]int{}
+	knocks := map[int]map[string]int{}
 	add := func(m map[int]map[string]int, round int, pid string, v int) {
 		if m[round] == nil {
 			m[round] = map[string]int{}
@@ -125,20 +131,21 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 		m[round][pid] += v
 	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT r.number, re.participant_id, re.points
+		SELECT r.number, re.participant_id, re.points, re.knocks
 		FROM round_entries re JOIN rounds r ON r.id = re.round_id
 		WHERE r.tournament_id = $1`, tournamentID)
 	if err != nil {
 		return st, err
 	}
 	for rows.Next() {
-		var n, pts int
+		var n, pts, k int
 		var pid string
-		if err := rows.Scan(&n, &pid, &pts); err != nil {
+		if err := rows.Scan(&n, &pid, &pts, &k); err != nil {
 			rows.Close()
 			return st, err
 		}
 		add(manual, n, pid, pts)
+		add(knocks, n, pid, k)
 	}
 	rows.Close()
 	main := map[int]map[string]int{}
@@ -189,6 +196,7 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 		for _, p := range t.Participants {
 			st.Scores = append(st.Scores, models.RoundScore{RoundNumber: r.Number, ParticipantID: p.ID, Points: scores[r.Number][p.ID]})
 			st.Manual = append(st.Manual, models.RoundScore{RoundNumber: r.Number, ParticipantID: p.ID, Points: manual[r.Number][p.ID]})
+			st.Knocks = append(st.Knocks, models.RoundKnocks{RoundNumber: r.Number, ParticipantID: p.ID, Knocks: knocks[r.Number][p.ID]})
 		}
 	}
 

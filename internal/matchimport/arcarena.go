@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/battle-for-respect/backend/internal/store"
 )
 
 const ArenaAPI = "https://arcarena.ru/api"
@@ -122,7 +124,8 @@ func FromArena(am ArenaMatch, live ArenaLive, veto ArenaVeto) Match {
 				r.Tasks = append(r.Tasks, it)
 			}
 			if manual := lr.Score[key] - taskPts; manual > 0 {
-				r.Manual[side] = manual
+				// Ручные очки на arcarena - ноки по 3 и задания соперника по 1, а таких заданий не больше двух.
+				r.Manual[side], r.Knocks[side] = manual, manual/store.KnockPoints
 			}
 		}
 		m.Rounds = append(m.Rounds, r)
