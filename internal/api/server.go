@@ -89,6 +89,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/ws/overlay", s.handleOverlayWS)
 		r.Get("/highlights", s.handleListHighlights)
 		r.Get("/media/*", s.handleServeMedia)
+		r.Get("/site", s.handleGetSite)
 
 		// --- Authenticated user ---
 		r.Group(func(r chi.Router) {
@@ -157,6 +158,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/seasons", s.handleStartSeason)
 			r.Patch("/seasons/{id}", s.handleUpdateSeason)
 			r.Delete("/seasons/{id}", s.handleDeleteSeason)
+
+			// Дизайн сайта для всех посетителей: прежний или новый.
+			r.Put("/site/design", s.handleSetSiteDesign)
 
 			// Общие пресеты раскладки оверлея (сохранить/переключать шаблоны).
 			r.Get("/overlay/presets", s.handleListOverlayPresets)

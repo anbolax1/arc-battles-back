@@ -193,6 +193,8 @@ cd backend
 | GET | `/api/rules` | все | задания (пул бонусных) и усложнения с типом значения |
 | GET | `/api/overlay/state` | все | текущее состояние оверлея |
 | GET | `/api/ws/overlay` | все | WebSocket: поток состояния для OBS |
+| GET | `/api/site` | все | общие настройки сайта: `{design: classic\|surface}` |
+| PUT | `/api/site/design` | superadmin | включить дизайн для всех посетителей (`{design}`) |
 | PATCH | `/api/users/{id}/role` | superadmin | назначить роль пользователю (`{role}`) |
 | POST | `/api/tournaments` | organizer | создать турнир |
 | PATCH | `/api/tournaments/{id}` | organizer | статус / победитель |
