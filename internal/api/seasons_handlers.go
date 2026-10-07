@@ -3,9 +3,11 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/battle-for-respect/backend/internal/store"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,6 +20,32 @@ func (s *Server) handleListSeasons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, seasons)
+}
+
+// handleSeasonRecap - итоги сезона для страницы /season/{номер}; сезон - по номеру или id.
+func (s *Server) handleSeasonRecap(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	var sn models.Season
+	var err error
+	if n, convErr := strconv.Atoi(key); convErr == nil {
+		sn, err = s.Store.SeasonByNumber(r.Context(), n)
+	} else {
+		sn, err = s.Store.GetSeason(r.Context(), key)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "сезон не найден")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	data, err := s.Store.SeasonRecapJSON(r.Context(), sn)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeRaw(w, http.StatusOK, data)
 }
 
 // handleStartSeason (superadmin) — завершить текущий активный сезон и начать новый.

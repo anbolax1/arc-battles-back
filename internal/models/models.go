@@ -94,6 +94,7 @@ type Season struct {
 	CreatedAt time.Time  `json:"createdAt"`
 	KFactor   int        `json:"kFactor"`
 	StartMmr  int        `json:"startMmr"`
+	Number    *int       `json:"number,omitempty"` // для адреса страницы итогов /season/{номер}
 }
 
 // MapInfo - карта из справочника (пики-баны, задания на карту, превью).

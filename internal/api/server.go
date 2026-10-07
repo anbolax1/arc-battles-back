@@ -73,6 +73,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/tournaments/{id}", s.handleGetTournament)
 		r.Get("/leaderboard", s.handleLeaderboard)
 		r.Get("/seasons", s.handleListSeasons)
+		r.Get("/seasons/{key}/recap", s.handleSeasonRecap)
 		r.Get("/players/{login}", s.handleGetPlayer)
 		r.Get("/teams/{teamKey}", s.handleGetTeam)
 		r.Get("/claim/{token}", s.handleClaimInfo)

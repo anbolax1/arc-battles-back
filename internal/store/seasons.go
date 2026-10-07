@@ -8,11 +8,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const seasonCols = `id, name, status, started_at, ended_at, created_at, k_factor, start_mmr`
+const seasonCols = `id, name, status, started_at, ended_at, created_at, k_factor, start_mmr, number`
 
 func scanSeason(row pgx.Row) (models.Season, error) {
 	var s models.Season
-	err := row.Scan(&s.ID, &s.Name, &s.Status, &s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.KFactor, &s.StartMmr)
+	err := row.Scan(&s.ID, &s.Name, &s.Status, &s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.KFactor, &s.StartMmr, &s.Number)
 	return s, err
 }
 
@@ -35,6 +35,15 @@ func normSeasonRating(k, start int) (int, int) {
 // GetSeason - сезон по id.
 func (s *Store) GetSeason(ctx context.Context, id string) (models.Season, error) {
 	sn, err := scanSeason(s.Pool.QueryRow(ctx, `SELECT `+seasonCols+` FROM seasons WHERE id = $1`, id))
+	if err == pgx.ErrNoRows {
+		return models.Season{}, ErrNotFound
+	}
+	return sn, err
+}
+
+// SeasonByNumber - сезон по номеру из адреса страницы итогов.
+func (s *Store) SeasonByNumber(ctx context.Context, n int) (models.Season, error) {
+	sn, err := scanSeason(s.Pool.QueryRow(ctx, `SELECT `+seasonCols+` FROM seasons WHERE number = $1`, n))
 	if err == pgx.ErrNoRows {
 		return models.Season{}, ErrNotFound
 	}
@@ -109,7 +118,8 @@ func (s *Store) StartNewSeason(ctx context.Context, name string, k, start int) (
 		return models.Season{}, err
 	}
 	sn, err := scanSeason(tx.QueryRow(ctx,
-		`INSERT INTO seasons (name, status, k_factor, start_mmr) VALUES ($1, 'active', $2, $3) RETURNING `+seasonCols, name, k, start))
+		`INSERT INTO seasons (name, status, k_factor, start_mmr, number)
+		 VALUES ($1, 'active', $2, $3, (SELECT COALESCE(max(number), 0) + 1 FROM seasons)) RETURNING `+seasonCols, name, k, start))
 	if err != nil {
 		return models.Season{}, err
 	}
