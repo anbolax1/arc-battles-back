@@ -35,10 +35,11 @@ const (
 	FormatShow  = "show"
 )
 
-// vetoOrders - порядок пиков-банов по формату. Матч: бан A, бан B, пик A (1-й раунд), бан B, бан A,
-// оставшаяся карта - 2-й раунд. Шоу-матч: пик A, пик B, бан A, бан B, пик A - три раунда.
-var vetoOrders = map[string][]models.VetoStep{
-	FormatMatch: {
+// vetoOrders - порядок пиков-банов по числу раундов. Два раунда: бан A, бан B, пик A (1-й раунд),
+// бан B, бан A, оставшаяся карта - 2-й раунд. Три раунда (шоу-матч или обычный матч на три карты):
+// пик A, пик B, бан A, бан B, пик A.
+var vetoOrders = map[int][]models.VetoStep{
+	2: {
 		{Action: "ban", Side: "A"},
 		{Action: "ban", Side: "B"},
 		{Action: "pick", Side: "A", Round: 1},
@@ -46,7 +47,7 @@ var vetoOrders = map[string][]models.VetoStep{
 		{Action: "ban", Side: "A"},
 		{Action: "rest", Round: 2},
 	},
-	FormatShow: {
+	3: {
 		{Action: "pick", Side: "A", Round: 1},
 		{Action: "pick", Side: "B", Round: 2},
 		{Action: "ban", Side: "A"},
@@ -55,23 +56,21 @@ var vetoOrders = map[string][]models.VetoStep{
 	},
 }
 
-// VetoOrder - порядок пиков-банов для формата матча. A - сторона с меньшим MMR или новичок сезона.
-func VetoOrder(format string) []models.VetoStep {
-	if order, ok := vetoOrders[format]; ok {
+// VetoOrder - порядок пиков-банов для матча на rounds раундов. A - сторона с меньшим MMR или новичок
+// сезона. У прошлых матчей с одним раундом пиков-банов не было - для них порядок двухраундовый.
+func VetoOrder(rounds int) []models.VetoStep {
+	if order, ok := vetoOrders[rounds]; ok {
 		return order
 	}
-	return vetoOrders[FormatMatch]
+	return vetoOrders[2]
 }
 
-// FormatRounds - сколько раундов в матче этого формата.
-func FormatRounds(format string) int {
-	n := 0
-	for _, st := range VetoOrder(format) {
-		if st.Round > n {
-			n = st.Round
-		}
+// MatchRounds - сколько раундов будет в новом матче: у шоу-матча всегда три, обычный - два или три.
+func MatchRounds(format string, rounds int) int {
+	if format == FormatShow || rounds == 3 {
+		return 3
 	}
-	return n
+	return 2
 }
 
 // ListVeto - ходы пиков-банов матча по порядку.
@@ -140,14 +139,14 @@ func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error
 	} else if started {
 		return ErrMatchStarted
 	}
-	var format string
-	if err := tx.QueryRow(ctx, `SELECT format FROM tournaments WHERE id = $1`, tournamentID).Scan(&format); err != nil {
+	var rounds int
+	if err := tx.QueryRow(ctx, `SELECT total_rounds FROM tournaments WHERE id = $1`, tournamentID).Scan(&rounds); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		return err
 	}
-	order := VetoOrder(format)
+	order := VetoOrder(rounds)
 	var done int
 	var used bool
 	if err := tx.QueryRow(ctx, `

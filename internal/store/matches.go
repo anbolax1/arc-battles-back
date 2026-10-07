@@ -32,6 +32,7 @@ type NewMatch struct {
 	PlayerType       string
 	RatingMultiplier int
 	Format           string     // match | show
+	Rounds           int        // обычный матч - 2 или 3 раунда, у шоу-матча всегда 3
 	StartsAt         *time.Time // когда начнётся шоу-матч
 	Prize            string     // приз шоу-матча
 	Sides            [2]MatchSide
@@ -123,7 +124,7 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 	if in.RatingMultiplier != 2 {
 		in.RatingMultiplier = 1
 	}
-	rounds := FormatRounds(in.Format)
+	rounds := MatchRounds(in.Format, in.Rounds)
 	rule := s.activeSeasonRule(ctx)
 	a, err := s.describeSide(ctx, in.Mode, in.Sides[0], rule)
 	if err != nil {
