@@ -189,6 +189,46 @@ func (s *Store) Player1x1OpponentsBySeason(ctx context.Context, userID string) (
 	return out, rows.Err()
 }
 
+// Player1x1KnocksBySeason - ноки игрока в матчах 1×1 по сезонам. Ключ - сезон, пусто - матчи вне сезонов.
+func (s *Store) Player1x1KnocksBySeason(ctx context.Context, userID string) (map[string]models.KnockStats, error) {
+	const q = `
+		SELECT COALESCE(t.season_id, '') AS season, t.id, COALESCE(opp.name, ''),
+		       (SELECT COALESCE(SUM(re.knocks), 0) FROM round_entries re WHERE re.participant_id = p.id)::int
+		FROM participants p
+		JOIN tournaments t ON t.id = p.tournament_id
+		LEFT JOIN LATERAL (
+		    SELECT p2.name FROM participants p2
+		    WHERE p2.tournament_id = t.id AND p2.id <> p.id
+		    ORDER BY p2.seed LIMIT 1
+		) opp ON true
+		WHERE p.user_id = $1 AND t.mode = '1x1' AND t.status = 'finished'
+		  AND EXISTS (SELECT 1 FROM rounds r JOIN round_entries re ON re.round_id = r.id
+		              WHERE r.tournament_id = t.id AND re.knocks > 0)
+		ORDER BY COALESCE(t.starts_at, t.created_at)`
+	rows, err := s.Pool.Query(ctx, q, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]models.KnockStats{}
+	for rows.Next() {
+		var season, matchID, opponent string
+		var knocks int
+		if err := rows.Scan(&season, &matchID, &opponent, &knocks); err != nil {
+			return nil, err
+		}
+		k := out[season]
+		k.Matches++
+		k.Knocks += knocks
+		// Матчи идут по порядку: при равенстве рекордом остаётся первый.
+		if knocks > k.Best {
+			k.Best, k.BestMatch, k.BestOpponent = knocks, matchID, opponent
+		}
+		out[season] = k
+	}
+	return out, rows.Err()
+}
+
 // Player1x1Place - место игрока в таблице 1×1 текущего сезона (0 - если в этом сезоне не играл).
 func (s *Store) Player1x1Place(ctx context.Context, userID string) (int, error) {
 	var myMmr *int
@@ -436,8 +476,8 @@ func joinTeamName(a, b string) string {
 	return strings.Join(parts, " & ")
 }
 
-// PlayerStatsBundle собирает расширенную статистику 1×1 игрока: ленту, сводку и разбивку по картам и
-// соперникам отдельно по сезонам - в каждом сезоне рейтинг начинается заново.
+// PlayerStatsBundle собирает расширенную статистику 1×1 игрока: ленту, сводку, разбивку по картам и
+// соперникам и ноки отдельно по сезонам - в каждом сезоне рейтинг начинается заново.
 func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.MmrStats, []models.MmrPoint, map[string]models.SeasonAnalytics, error) {
 	timeline, err := s.Player1x1Timeline(ctx, userID)
 	if err != nil {
@@ -451,12 +491,20 @@ func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.Mm
 	if err != nil {
 		return models.MmrStats{}, nil, nil, err
 	}
+	knocks, err := s.Player1x1KnocksBySeason(ctx, userID)
+	if err != nil {
+		return models.MmrStats{}, nil, nil, err
+	}
 	analytics := map[string]models.SeasonAnalytics{}
 	for season := range maps {
-		analytics[season] = seasonAnalytics(maps[season], opps[season])
+		analytics[season] = seasonAnalytics(maps[season], opps[season], knocks[season])
 	}
 	for season := range opps {
-		analytics[season] = seasonAnalytics(maps[season], opps[season])
+		analytics[season] = seasonAnalytics(maps[season], opps[season], knocks[season])
+	}
+	// Ничья не меняет MMR и не попадает в карты и соперников, а ноки в ней есть.
+	for season := range knocks {
+		analytics[season] = seasonAnalytics(maps[season], opps[season], knocks[season])
 	}
 	stats := computeMmrStats(timeline)
 	// Лента - за все сезоны, а текущий MMR - в текущем сезоне (в начале сезона у всех стартовый).
@@ -470,14 +518,14 @@ func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.Mm
 }
 
 // seasonAnalytics - разбивка одного сезона; пустой список уходит массивом, а не null.
-func seasonAnalytics(maps []models.MapStat, opps []models.OpponentStat) models.SeasonAnalytics {
+func seasonAnalytics(maps []models.MapStat, opps []models.OpponentStat, knocks models.KnockStats) models.SeasonAnalytics {
 	if maps == nil {
 		maps = []models.MapStat{}
 	}
 	if opps == nil {
 		opps = []models.OpponentStat{}
 	}
-	return models.SeasonAnalytics{Maps: maps, Opponents: opps}
+	return models.SeasonAnalytics{Maps: maps, Opponents: opps, Knocks: knocks}
 }
 
 // TeamProfile собирает полную статистику команды 2×2. ok=false — команды нет.

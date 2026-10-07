@@ -469,10 +469,21 @@ type PlayerProfile struct {
 	Teams     []TeamSummary              `json:"teams"`        // команды 2×2, где состоит игрок
 }
 
-// SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам.
+// SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам и ноки игрока.
 type SeasonAnalytics struct {
 	Maps      []MapStat      `json:"maps"`
 	Opponents []OpponentStat `json:"opponents"`
+	Knocks    KnockStats     `json:"knocks"`
+}
+
+// KnockStats - ноки игрока за сезон. Матч идёт в зачёт, только если ноки в нём записаны хотя бы
+// одной стороне: в остальных их не считали, и нули занизили бы среднее.
+type KnockStats struct {
+	Matches      int    `json:"matches"`
+	Knocks       int    `json:"knocks"`
+	Best         int    `json:"best"` // больше всего ноков за один матч
+	BestMatch    string `json:"bestMatch,omitempty"`
+	BestOpponent string `json:"bestOpponent,omitempty"`
 }
 
 // Highlight — пользовательский хайлайт (твич-клип, скачанный к нам, или загруженный файл).
