@@ -136,6 +136,11 @@ func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Дата окончания решает, есть ли у сезона чемпион: тег выдаётся или снимается сразу.
+	if err := s.Store.SyncSeasonWinnerTags(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, sn)
 }
 

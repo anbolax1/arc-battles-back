@@ -43,7 +43,7 @@ func main() {
 		log.Println("MMR пересчитан по правилам сезонов")
 	}
 	if err := st.SyncSeasonWinnerTags(ctx); err != nil {
-		log.Printf("теги победителей сезонов: %v", err)
+		log.Printf("теги чемпионов сезонов: %v", err)
 	}
 	// Нашивки догоняют матчи, изменённые в обход сервера: импорт, перенос с arcarena, новые правила.
 	if _, err := st.SyncPatches(ctx); err != nil {
@@ -73,6 +73,15 @@ func main() {
 		Handler:           srv.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	// Дата окончания сезона наступает сама по себе - тег чемпиона проверяется раз в минуту.
+	go func() {
+		for range time.Tick(time.Minute) {
+			if err := st.SyncSeasonWinnerTags(ctx); err != nil {
+				log.Printf("теги чемпионов сезонов: %v", err)
+			}
+		}
+	}()
 
 	go func() {
 		log.Printf("API слушает на :%s", cfg.Port)

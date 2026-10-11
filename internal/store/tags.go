@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/jackc/pgx/v5"
@@ -16,13 +17,13 @@ var ErrAutoTag = errors.New("тег выдаётся автоматически"
 // winnerTagColor - золотой, как у бейджа чемпиона.
 const winnerTagColor = "#ffc53d"
 
-// seasonWinnerTagName - «Победитель сезона 2» из названия «Сезон 2».
+// seasonWinnerTagName - «Чемпион сезона 2» из названия «Сезон 2».
 func seasonWinnerTagName(season string) string {
 	name := strings.TrimSpace(season)
 	if rest, ok := strings.CutPrefix(name, "Сезон "); ok {
-		return "Победитель сезона " + rest
+		return "Чемпион сезона " + rest
 	}
-	return "Победитель: " + name
+	return "Чемпион: " + name
 }
 
 const tagCols = `t.id, t.name, t.color, t.visible, COALESCE(t.role, ''), t.season_id, COALESCE(sn.name, '')`
@@ -232,45 +233,63 @@ func (s *Store) SetTagHiddenByUser(ctx context.Context, userID, tagID string, hi
 	return err
 }
 
-// SyncSeasonWinnerTags выдаёт победителю каждого завершённого сезона его тег: держатель тега -
-// всегда первое место таблицы 1×1 этого сезона.
+// winnerTagLock - номер блокировки выдачи тегов чемпионов: сервер и перенос матчей с arcarena
+// пересчитывают их одновременно.
+const winnerTagLock = 7462
+
+// SyncSeasonWinnerTags выдаёт тег чемпиона сезонам, у которых наступила дата окончания: держатель
+// тега - всегда первое место таблицы 1×1 сезона. Даты нет или она впереди - нет и тега.
 func (s *Store) SyncSeasonWinnerTags(ctx context.Context) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, winnerTagLock); err != nil {
+		return err
+	}
 	seasons, err := s.ListSeasons(ctx)
 	if err != nil {
 		return err
 	}
+	now := time.Now()
+	crowned := []string{}
 	for _, sn := range seasons {
-		if sn.Status != "finished" {
+		if sn.EndedAt == nil || sn.EndedAt.After(now) {
 			continue
 		}
 		rows, err := s.Leaderboard(ctx, "1x1", sn.ID)
 		if err != nil {
 			return err
 		}
+		if len(rows) == 0 {
+			continue
+		}
+		crowned = append(crowned, sn.ID)
+		// Тег уже есть - не трогаем: название и цвет мог поменять организатор.
 		var tagID string
-		if err := s.Pool.QueryRow(ctx, `
-			INSERT INTO tags (name, color, season_id) VALUES ($1, $2, $3)
-			ON CONFLICT (season_id) WHERE season_id IS NOT NULL DO UPDATE SET season_id = EXCLUDED.season_id
-			RETURNING id`, seasonWinnerTagName(sn.Name), winnerTagColor, sn.ID).Scan(&tagID); err != nil {
+		if err := tx.QueryRow(ctx, `
+			WITH ins AS (
+				INSERT INTO tags (name, color, season_id) VALUES ($1, $2, $3)
+				ON CONFLICT (season_id) WHERE season_id IS NOT NULL DO NOTHING
+				RETURNING id
+			)
+			SELECT id FROM ins UNION ALL SELECT id FROM tags WHERE season_id = $3 LIMIT 1`,
+			seasonWinnerTagName(sn.Name), winnerTagColor, sn.ID).Scan(&tagID); err != nil {
 			return err
 		}
-		winner := ""
-		if len(rows) > 0 {
-			winner = rows[0].UserID
-		}
-		if _, err := s.Pool.Exec(ctx, `DELETE FROM user_tags WHERE tag_id = $1 AND user_id <> $2`, tagID, winner); err != nil {
+		winner := rows[0].UserID
+		if _, err := tx.Exec(ctx, `DELETE FROM user_tags WHERE tag_id = $1 AND user_id <> $2`, tagID, winner); err != nil {
 			return err
 		}
-		if winner != "" {
-			if _, err := s.Pool.Exec(ctx,
-				`INSERT INTO user_tags (user_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, winner, tagID); err != nil {
-				return err
-			}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO user_tags (user_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, winner, tagID); err != nil {
+			return err
 		}
 	}
-	// Сезон снова открыли - победителя у него пока нет.
-	_, err = s.Pool.Exec(ctx, `
-		DELETE FROM tags WHERE season_id IS NOT NULL
-		  AND season_id NOT IN (SELECT id FROM seasons WHERE status = 'finished')`)
-	return err
+	// Дату окончания убрали или перенесли вперёд - чемпиона у сезона пока нет.
+	if _, err := tx.Exec(ctx, `DELETE FROM tags WHERE season_id IS NOT NULL AND NOT (season_id = ANY($1))`, crowned); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

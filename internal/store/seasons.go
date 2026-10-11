@@ -114,7 +114,10 @@ func (s *Store) StartNewSeason(ctx context.Context, name string, k, start int) (
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `UPDATE seasons SET status = 'finished', ended_at = now() WHERE status = 'active'`); err != nil {
+	// Наступившая дата окончания остаётся - с неё у сезона чемпион, будущая сдвигается на сейчас.
+	if _, err := tx.Exec(ctx, `
+		UPDATE seasons SET status = 'finished', ended_at = LEAST(COALESCE(ended_at, now()), now())
+		WHERE status = 'active'`); err != nil {
 		return models.Season{}, err
 	}
 	sn, err := scanSeason(tx.QueryRow(ctx,
