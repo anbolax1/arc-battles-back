@@ -419,6 +419,8 @@ type TeamProfile struct {
 	Timeline  []MmrPoint     `json:"timeline"`
 	Maps      []MapStat      `json:"maps"`
 	Opponents []OpponentStat `json:"opponents"`
+	// Analytics - карты и соперники по сезонам: в каждом сезоне рейтинг команды начинается заново.
+	Analytics map[string]SeasonAnalytics `json:"analytics"`
 }
 
 // PlayerHistoryItem — одно участие игрока в турнире (для профиля, B6).

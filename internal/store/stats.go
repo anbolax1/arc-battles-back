@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 
 	"github.com/battle-for-respect/backend/internal/models"
+	"github.com/jackc/pgx/v5"
 )
 
 // Сыгранные карты матча (t - его турнир): из начатых раундов - при досрочном завершении следующая карта
@@ -290,7 +292,7 @@ func (s *Store) TeamsForUser(ctx context.Context, userID string) ([]models.TeamS
 		return nil, err
 	}
 	for i := range out {
-		if p, err := s.TeamPlace(ctx, out[i].Mmr); err == nil {
+		if p, err := s.TeamPlace(ctx, out[i].TeamKey); err == nil {
 			out[i].Place = p
 		}
 	}
@@ -317,14 +319,22 @@ func (s *Store) TeamMembers(ctx context.Context, teamKey string) ([]models.TeamM
 	return []models.TeamMember{a, b}, mmr, name, true, nil
 }
 
-// TeamPlace — место команды по MMR среди всех команд.
-func (s *Store) TeamPlace(ctx context.Context, teamMmr int) (int, error) {
-	var above int
-	if err := s.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM team_mmr WHERE mmr > $1`, teamMmr).Scan(&above); err != nil {
-		return 0, err
+// TeamPlace - место команды в таблице 2×2 текущего сезона среди сыгравших в нём; 0 - в этом сезоне
+// не играла. Остальные команды держат стартовый MMR и в таблицу сезона не входят.
+func (s *Store) TeamPlace(ctx context.Context, teamKey string) (int, error) {
+	var place int
+	err := s.Pool.QueryRow(ctx, `
+		WITH played AS (
+			SELECT tm.team_key, tm.mmr FROM team_mmr tm
+			WHERE EXISTS (SELECT 1 FROM team_mmr_history h
+			              WHERE h.team_key = tm.team_key AND COALESCE(h.season_key, '') = $2)
+		)
+		SELECT 1 + (SELECT COUNT(*) FROM played p WHERE p.mmr > me.mmr) FROM played me WHERE me.team_key = $1`,
+		teamKey, s.activeSeasonRule(ctx).Key).Scan(&place)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
 	}
-	return above + 1, nil
+	return place, err
 }
 
 // TeamTimeline — динамика MMR команды (ASC по времени): соперник (команда), карты, дельта, исход.
@@ -416,6 +426,79 @@ func (s *Store) TeamOpponents(ctx context.Context, teamKey string) ([]models.Opp
 		}
 		o.Name = joinTeamName(oppA, oppB)
 		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// TeamMapsBySeason - разбивка матчей команды по картам в каждом сезоне (взвешенно по ×2); матч на
+// нескольких картах засчитан на каждую. Ключ - сезон, пусто - матчи вне сезонов.
+func (s *Store) TeamMapsBySeason(ctx context.Context, teamKey string) (map[string][]models.MapStat, error) {
+	const q = `
+		SELECT COALESCE(h.season_key, '') AS season, ` + mapStatName + ` AS mp,
+		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0), 0)::int AS wins,
+		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
+		       COALESCE(SUM(t.games), 0)::int AS games
+		FROM team_mmr_history h
+		JOIN tournaments t ON t.id = h.tournament_id
+		` + matchMapsJoin + `
+		WHERE h.team_key = $1
+		GROUP BY season, ` + mapStatKey + `
+		ORDER BY season, games DESC, mp`
+	rows, err := s.Pool.Query(ctx, q, teamKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]models.MapStat{}
+	for rows.Next() {
+		var season string
+		var m models.MapStat
+		if err := rows.Scan(&season, &m.Map, &m.Wins, &m.Losses, &m.Games); err != nil {
+			return nil, err
+		}
+		if m.Map == "" {
+			m.Map = noMapName
+		}
+		out[season] = append(out[season], m)
+	}
+	return out, rows.Err()
+}
+
+// TeamOpponentsBySeason - соперники команды в каждом сезоне (взвешенно по ×2), частые сверху.
+// Ключ - сезон, пусто - матчи вне сезонов.
+func (s *Store) TeamOpponentsBySeason(ctx context.Context, teamKey string) (map[string][]models.OpponentStat, error) {
+	const q = `
+		SELECT COALESCE(h.season_key, '') AS season, COALESCE(opp.team_key, '') AS opp_key,
+		       COALESCE(ua.login, '') AS opp_a, COALESCE(ub.login, '') AS opp_b,
+		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0), 0)::int AS wins,
+		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
+		       COALESCE(SUM(t.games), 0)::int AS games
+		FROM team_mmr_history h
+		JOIN tournaments t ON t.id = h.tournament_id
+		LEFT JOIN LATERAL (
+		    SELECT h2.team_key FROM team_mmr_history h2
+		    WHERE h2.tournament_id = t.id AND h2.team_key <> $1 LIMIT 1
+		) opp ON true
+		LEFT JOIN team_mmr tmo ON tmo.team_key = opp.team_key
+		LEFT JOIN users ua ON ua.id = tmo.member_a
+		LEFT JOIN users ub ON ub.id = tmo.member_b
+		WHERE h.team_key = $1
+		GROUP BY season, opp_key, opp_a, opp_b
+		ORDER BY season, games DESC`
+	rows, err := s.Pool.Query(ctx, q, teamKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]models.OpponentStat{}
+	for rows.Next() {
+		var season, oppA, oppB string
+		var o models.OpponentStat
+		if err := rows.Scan(&season, &o.TeamKey, &oppA, &oppB, &o.Wins, &o.Losses, &o.Games); err != nil {
+			return nil, err
+		}
+		o.Name = joinTeamName(oppA, oppB)
+		out[season] = append(out[season], o)
 	}
 	return out, rows.Err()
 }
@@ -546,9 +629,25 @@ func (s *Store) TeamProfile(ctx context.Context, teamKey string) (models.TeamPro
 	if err != nil {
 		return models.TeamProfile{}, false, err
 	}
+	mapsBySeason, err := s.TeamMapsBySeason(ctx, teamKey)
+	if err != nil {
+		return models.TeamProfile{}, false, err
+	}
+	oppsBySeason, err := s.TeamOpponentsBySeason(ctx, teamKey)
+	if err != nil {
+		return models.TeamProfile{}, false, err
+	}
+	analytics := map[string]models.SeasonAnalytics{}
+	for season := range mapsBySeason {
+		analytics[season] = seasonAnalytics(mapsBySeason[season], oppsBySeason[season], models.KnockStats{})
+	}
+	for season := range oppsBySeason {
+		analytics[season] = seasonAnalytics(mapsBySeason[season], oppsBySeason[season], models.KnockStats{})
+	}
 	stats := computeMmrStats(timeline)
+	// Лента - за все сезоны, а MMR и место - в текущем сезоне (не игравшая в нём команда вне таблицы).
 	stats.CurrentMmr = mmr
-	if place, err := s.TeamPlace(ctx, mmr); err == nil {
+	if place, err := s.TeamPlace(ctx, teamKey); err == nil {
 		stats.Place = place
 	}
 	return models.TeamProfile{
@@ -559,5 +658,6 @@ func (s *Store) TeamProfile(ctx context.Context, teamKey string) (models.TeamPro
 		Timeline:  timeline,
 		Maps:      maps,
 		Opponents: opps,
+		Analytics: analytics,
 	}, true, nil
 }
