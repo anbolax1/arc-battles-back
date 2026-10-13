@@ -13,7 +13,7 @@ var ErrMatchStarted = errors.New("матч уже начался")
 
 // ListMaps - действующие карты справочника по порядку.
 func (s *Store) ListMaps(ctx context.Context) ([]models.MapInfo, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT code, name, image, sort_order FROM maps WHERE active ORDER BY sort_order, name`)
+	rows, err := s.Pool.Query(ctx, `SELECT code, name, image, sort_order, added_at FROM maps WHERE active ORDER BY sort_order, name`)
 	if err != nil {
 		return nil, err
 	}
@@ -21,7 +21,7 @@ func (s *Store) ListMaps(ctx context.Context) ([]models.MapInfo, error) {
 	out := []models.MapInfo{}
 	for rows.Next() {
 		var m models.MapInfo
-		if err := rows.Scan(&m.Code, &m.Name, &m.Image, &m.SortOrder); err != nil {
+		if err := rows.Scan(&m.Code, &m.Name, &m.Image, &m.SortOrder, &m.AddedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

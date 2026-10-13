@@ -99,10 +99,11 @@ type Season struct {
 
 // MapInfo - карта из справочника (пики-баны, задания на карту, превью).
 type MapInfo struct {
-	Code      string `json:"code"`
-	Name      string `json:"name"`
-	Image     string `json:"image"`
-	SortOrder int    `json:"sortOrder"`
+	Code      string    `json:"code"`
+	Name      string    `json:"name"`
+	Image     string    `json:"image"`
+	SortOrder int       `json:"sortOrder"`
+	AddedAt   time.Time `json:"addedAt"` // с этого момента карта в пуле пиков-банов
 }
 
 // VetoAction - ход пиков-банов: бан/пик стороны или оставшаяся карта, ушедшая в раунд.
