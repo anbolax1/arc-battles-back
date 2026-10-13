@@ -18,8 +18,8 @@ import (
 // maxNewsTitle - заголовок стоит крупно в ленте: длиннее не помещается в пару строк.
 const maxNewsTitle = 140
 
-// maxNewsBody - новость, а не статья: длинный текст лучше разбить на несколько.
-const maxNewsBody = 20000
+// maxNewsBody - предел текста вместе с разметкой: новость, а не статья, длинный текст лучше разбить.
+const maxNewsBody = 60000
 
 // newsImageDir - папка картинок новостей в хранилище медиа.
 const newsImageDir = "news"
@@ -32,12 +32,12 @@ type newsBody struct {
 
 func (b *newsBody) check() string {
 	b.Title = strings.TrimSpace(b.Title)
-	b.Body = strings.TrimSpace(b.Body)
+	b.Body = newsHTML(b.Body)
 	switch {
 	case b.Title == "" || utf8.RuneCountInString(b.Title) > maxNewsTitle:
 		return fmt.Sprintf("заголовок — от 1 до %d символов", maxNewsTitle)
 	case utf8.RuneCountInString(b.Body) > maxNewsBody:
-		return fmt.Sprintf("текст — до %d символов", maxNewsBody)
+		return "текст слишком длинный — разбейте новость на несколько"
 	}
 	return ""
 }
