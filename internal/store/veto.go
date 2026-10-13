@@ -35,35 +35,31 @@ const (
 	FormatShow  = "show"
 )
 
-// vetoOrders - порядок пиков-банов по числу раундов. Два раунда: бан A, бан B, пик A (1-й раунд),
-// бан B, бан A, оставшаяся карта - 2-й раунд. Три раунда (шоу-матч или обычный матч на три карты):
-// пик A, пик B, бан A, бан B, пик A.
-var vetoOrders = map[int][]models.VetoStep{
-	2: {
-		{Action: "ban", Side: "A"},
-		{Action: "ban", Side: "B"},
-		{Action: "pick", Side: "A", Round: 1},
-		{Action: "ban", Side: "B"},
-		{Action: "ban", Side: "A"},
-		{Action: "rest", Round: 2},
-	},
-	3: {
+// VetoOrder - порядок пиков-банов из pool карт, A - меньший MMR или новичок сезона. Два раунда: бан A, бан B,
+// пик A, бан B, бан A, пик B, лишние карты не играются; три - пик A, пик B и баны до последней карты, она в 3-м.
+func VetoOrder(rounds, pool int) []models.VetoStep {
+	if rounds != 3 {
+		return []models.VetoStep{
+			{Action: "ban", Side: "A"},
+			{Action: "ban", Side: "B"},
+			{Action: "pick", Side: "A", Round: 1},
+			{Action: "ban", Side: "B"},
+			{Action: "ban", Side: "A"},
+			{Action: "pick", Side: "B", Round: 2},
+		}
+	}
+	order := []models.VetoStep{
 		{Action: "pick", Side: "A", Round: 1},
 		{Action: "pick", Side: "B", Round: 2},
-		{Action: "ban", Side: "A"},
-		{Action: "ban", Side: "B"},
-		{Action: "pick", Side: "A", Round: 3},
-	},
+	}
+	for i := 0; i < pool-3; i++ {
+		order = append(order, models.VetoStep{Action: "ban", Side: [2]string{"A", "B"}[i%2]})
+	}
+	return append(order, models.VetoStep{Action: "rest", Round: 3})
 }
 
-// VetoOrder - порядок пиков-банов для матча на rounds раундов. A - сторона с меньшим MMR или новичок
-// сезона. У прошлых матчей с одним раундом пиков-банов не было - для них порядок двухраундовый.
-func VetoOrder(rounds int) []models.VetoStep {
-	if order, ok := vetoOrders[rounds]; ok {
-		return order
-	}
-	return vetoOrders[2]
-}
+// mapPoolSQL - сколько карт сейчас в пуле пиков-банов.
+const mapPoolSQL = `SELECT COUNT(*) FROM maps WHERE active`
 
 // MatchRounds - сколько раундов будет в новом матче: у шоу-матча всегда три, обычный - два или три.
 func MatchRounds(format string, rounds int) int {
@@ -146,7 +142,11 @@ func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error
 		}
 		return err
 	}
-	order := VetoOrder(rounds)
+	var pool int
+	if err := tx.QueryRow(ctx, mapPoolSQL).Scan(&pool); err != nil {
+		return err
+	}
+	order := VetoOrder(rounds, pool)
 	var done int
 	var used bool
 	if err := tx.QueryRow(ctx, `

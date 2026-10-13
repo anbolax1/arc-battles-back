@@ -107,7 +107,11 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 		return st, err
 	}
 	st.Tournament = t
-	st.VetoOrder = VetoOrder(t.TotalRounds)
+	var pool int
+	if err := s.Pool.QueryRow(ctx, mapPoolSQL).Scan(&pool); err != nil {
+		return st, err
+	}
+	st.VetoOrder = VetoOrder(t.TotalRounds, pool)
 	if st.Veto, err = s.ListVeto(ctx, tournamentID); err != nil {
 		return st, err
 	}
