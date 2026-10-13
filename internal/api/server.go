@@ -92,6 +92,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/highlights", s.handleListHighlights)
 		r.Get("/media/*", s.handleServeMedia)
 		r.Get("/site", s.handleGetSite)
+		r.Get("/news", s.handleListNews)
+		r.Get("/news/{id}", s.handleGetNews)
 
 		// --- Authenticated user ---
 		r.Group(func(r chi.Router) {
@@ -164,6 +166,14 @@ func (s *Server) Router() http.Handler {
 
 			// Дизайн сайта для всех посетителей: прежний или новый.
 			r.Put("/site/design", s.handleSetSiteDesign)
+
+			// Новости лиги: черновики, публикация по дате, картинка.
+			r.Get("/news/all", s.handleListAllNews)
+			r.Post("/news", s.handleCreateNews)
+			r.Patch("/news/{id}", s.handleUpdateNews)
+			r.Delete("/news/{id}", s.handleDeleteNews)
+			r.Put("/news/{id}/image", s.handleSetNewsImage)
+			r.Delete("/news/{id}/image", s.handleDeleteNewsImage)
 
 			// Общие пресеты раскладки оверлея (сохранить/переключать шаблоны).
 			r.Get("/overlay/presets", s.handleListOverlayPresets)

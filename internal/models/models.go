@@ -577,6 +577,18 @@ type Highlight struct {
 	CreatedAt       time.Time `json:"createdAt"`
 }
 
+// News - новость лиги. Без PublishedAt - черновик, с датой в будущем - выйдет сама.
+type News struct {
+	ID          string     `json:"id"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	ImageURL    string     `json:"imageUrl,omitempty"`
+	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	Published   bool       `json:"published"` // дата публикации наступила - новость видна на сайте
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
 // UserOverview — пользователь + агрегаты участия для раздела «Пользователи» в кабинете.
 // Email раскрываем только здесь (организатору); в публичной модели User он скрыт (json:"-").
 type UserOverview struct {
