@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"time"
@@ -39,12 +40,24 @@ type NewMatch struct {
 }
 
 type sideInfo struct {
-	part  models.Participant
-	mmr   int
-	isNew bool
+	part      models.Participant
+	mmr       int
+	prevGames int // матчей в прошлых сезонах
 }
 
-// describeSide собирает участника стороны и его MMR в текущем сезоне.
+// aGoesFirst - останется ли a стороной A, что ходит первой в пиках-банах: у неё меньше MMR, при равном -
+// меньше матчей в прошлых сезонах, при полном равенстве решает жребий.
+func aGoesFirst(a, b sideInfo, coin func() bool) bool {
+	if a.mmr != b.mmr {
+		return a.mmr < b.mmr
+	}
+	if a.prevGames != b.prevGames {
+		return a.prevGames < b.prevGames
+	}
+	return coin()
+}
+
+// describeSide собирает участника стороны, его MMR в текущем сезоне и опыт прошлых сезонов.
 func (s *Store) describeSide(ctx context.Context, mode string, side MatchSide, rule seasonRule) (sideInfo, error) {
 	if mode == "2x2" {
 		if len(side.Members) != 2 || side.Members[0] == side.Members[1] {
@@ -71,12 +84,12 @@ func (s *Store) describeSide(ctx context.Context, mode string, side MatchSide, r
 		if err != nil {
 			return sideInfo{}, err
 		}
-		var games int
+		var prev int
 		if err := s.Pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM team_mmr_history WHERE team_key = $1 AND season_key = $2`, key, rule.Key).Scan(&games); err != nil {
+			`SELECT COUNT(DISTINCT tournament_id) FROM team_mmr_history WHERE team_key = $1 AND season_key <> $2`, key, rule.Key).Scan(&prev); err != nil {
 			return sideInfo{}, err
 		}
-		return sideInfo{part: p, mmr: mmr, isNew: games == 0}, nil
+		return sideInfo{part: p, mmr: mmr, prevGames: prev}, nil
 	}
 
 	u, err := s.GetUser(ctx, side.UserID)
@@ -87,13 +100,13 @@ func (s *Store) describeSide(ctx context.Context, mode string, side MatchSide, r
 	if err != nil {
 		return sideInfo{}, err
 	}
-	var games int
+	var prev int
 	if err := s.Pool.QueryRow(ctx,
-		`SELECT COUNT(tournament_id) FROM mmr_history WHERE user_id = $1 AND mode = '1x1' AND season_key = $2`, u.ID, rule.Key).Scan(&games); err != nil {
+		`SELECT COUNT(DISTINCT tournament_id) FROM mmr_history WHERE user_id = $1 AND mode = '1x1' AND season_key <> $2`, u.ID, rule.Key).Scan(&prev); err != nil {
 		return sideInfo{}, err
 	}
 	uid := u.ID
-	return sideInfo{part: models.Participant{Kind: "player", Name: userName(u), UserID: &uid}, mmr: mmr, isNew: games == 0}, nil
+	return sideInfo{part: models.Participant{Kind: "player", Name: userName(u), UserID: &uid}, mmr: mmr, prevGames: prev}, nil
 }
 
 func userName(u models.User) string {
@@ -104,7 +117,6 @@ func userName(u models.User) string {
 }
 
 // CreateMatch заводит матч: обычный сразу становится текущим, шоу-матч ждёт своего времени в расписании.
-// Сторону A получает новичок сезона или тот, у кого меньше MMR - она ходит первой в пиках-банах.
 func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament, error) {
 	status, startsAt := "live", time.Now()
 	if in.Format == FormatShow {
@@ -137,7 +149,7 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 	if in.Mode == "1x1" && *a.part.UserID == *b.part.UserID {
 		return models.Tournament{}, ErrConflict
 	}
-	if (b.isNew && !a.isNew) || (a.isNew == b.isNew && b.mmr < a.mmr) {
+	if !aGoesFirst(a, b, func() bool { return rand.IntN(2) == 0 }) {
 		a, b = b, a
 	}
 
@@ -533,11 +545,15 @@ func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, err
 			FROM mmr_history h LEFT JOIN tournaments t ON t.id = h.tournament_id
 			WHERE h.mode = '1x1' AND h.season_key = $1
 			GROUP BY h.user_id
+		), prev AS (
+			SELECT user_id, COUNT(DISTINCT tournament_id) AS games
+			FROM mmr_history WHERE mode = '1x1' AND season_key <> $1
+			GROUP BY user_id
 		)
 		SELECT u.id, u.login, u.display_name, ($2::int + COALESCE(h.total, 0))::int,
 		       COALESCE(h.wins, 0)::int, COALESCE(h.losses, 0)::int,
-		       h.user_id IS NULL, u.password_hash LIKE '!%'
-		FROM users u LEFT JOIN h ON h.user_id = u.id
+		       h.user_id IS NULL, u.password_hash LIKE '!%', COALESCE(prev.games, 0)::int
+		FROM users u LEFT JOIN h ON h.user_id = u.id LEFT JOIN prev ON prev.user_id = u.id
 		ORDER BY h.user_id IS NULL, ($2::int + COALESCE(h.total, 0)) DESC, lower(u.login)`, rule.Key, rule.Start)
 	if err != nil {
 		return nil, err
@@ -546,7 +562,7 @@ func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, err
 	out := []models.MatchPlayer{}
 	for rows.Next() {
 		var p models.MatchPlayer
-		if err := rows.Scan(&p.ID, &p.Login, &p.DisplayName, &p.Mmr, &p.Wins, &p.Losses, &p.IsNew, &p.IsPlaceholder); err != nil {
+		if err := rows.Scan(&p.ID, &p.Login, &p.DisplayName, &p.Mmr, &p.Wins, &p.Losses, &p.IsNew, &p.IsPlaceholder, &p.PrevGames); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

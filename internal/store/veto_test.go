@@ -39,53 +39,44 @@ func vetoText(order []models.VetoStep) string {
 	return strings.Join(parts, ", ")
 }
 
-// Пики-баны раздают карты ровно на все раунды матча, без пропусков.
-func TestVetoOrderCoversRounds(t *testing.T) {
-	for _, rounds := range []int{2, 3} {
-		for _, pool := range []int{6, 7, 8} {
-			seen := map[int]bool{}
-			for _, st := range VetoOrder(rounds, pool) {
-				if st.Round > 0 {
-					seen[st.Round] = true
-				}
-			}
-			for r := 1; r <= rounds; r++ {
-				if !seen[r] {
-					t.Errorf("VetoOrder(%d, %d): нет карты на раунд %d", rounds, pool, r)
-				}
-			}
-			if len(seen) != rounds {
-				t.Errorf("VetoOrder(%d, %d): карты на %d раундов", rounds, pool, len(seen))
-			}
-		}
-	}
-	if got := vetoText(VetoOrder(1, 7)); got != vetoText(VetoOrder(2, 7)) {
-		t.Errorf("VetoOrder(1) должен совпадать с двухраундовым: %s", got)
-	}
-}
-
-// Семь карт: в двух раундах вторую карту выбирает B и одна карта не играется, в трёх баны идут
-// до последней карты - она уходит в 3-й раунд.
-func TestVetoOrderSevenMaps(t *testing.T) {
+// Два раунда: по два бана, первую карту берёт B, вторую - A; три раунда: третью карту выбирает чат.
+// У прошлых матчей с одним раундом пиков-банов не было - для них порядок двухраундовый.
+func TestVetoOrder(t *testing.T) {
 	cases := []struct {
 		rounds int
 		want   string
 	}{
-		{2, "ban A, ban B, pick A 1, ban B, ban A, pick B 2"},
-		{3, "pick A 1, pick B 2, ban A, ban B, ban A, ban B, rest 3"},
+		{2, "ban A, ban B, ban A, ban B, pick B 1, pick A 2"},
+		{3, "ban A, ban B, pick A 1, pick B 2, vote 3"},
+		{1, "ban A, ban B, ban A, ban B, pick B 1, pick A 2"},
 	}
 	for _, c := range cases {
-		if got := vetoText(VetoOrder(c.rounds, 7)); got != c.want {
-			t.Errorf("VetoOrder(%d, 7) = %s, want %s", c.rounds, got, c.want)
+		if got := vetoText(VetoOrder(c.rounds)); got != c.want {
+			t.Errorf("VetoOrder(%d) = %s, want %s", c.rounds, got, c.want)
 		}
 	}
 }
 
-// В трёх раундах ходов ровно столько, сколько карт в пуле: последний бан решает, какая карта останется.
-func TestVetoOrderThreeRoundsUsesWholePool(t *testing.T) {
-	for _, pool := range []int{5, 6, 7, 8} {
-		if n := len(VetoOrder(3, pool)); n != pool {
-			t.Errorf("VetoOrder(3, %d): %d ходов, а карт %d", pool, n, pool)
+// Сторона A - меньший MMR, при равном - меньше матчей в прошлых сезонах, при полном равенстве - жребий.
+func TestAGoesFirst(t *testing.T) {
+	heads := func() bool { return true }
+	tails := func() bool { return false }
+	cases := []struct {
+		name string
+		a, b sideInfo
+		coin func() bool
+		want bool
+	}{
+		{"меньше MMR ходит первым", sideInfo{mmr: 990, prevGames: 50}, sideInfo{mmr: 1010}, tails, true},
+		{"больше MMR уступает", sideInfo{mmr: 1010}, sideInfo{mmr: 990, prevGames: 50}, heads, false},
+		{"при равном MMR - кто меньше играл раньше", sideInfo{mmr: 1000, prevGames: 3}, sideInfo{mmr: 1000, prevGames: 12}, tails, true},
+		{"опытный при равном MMR уступает", sideInfo{mmr: 1000, prevGames: 12}, sideInfo{mmr: 1000, prevGames: 3}, heads, false},
+		{"два новичка - орёл", sideInfo{mmr: 1000}, sideInfo{mmr: 1000}, heads, true},
+		{"два новичка - решка", sideInfo{mmr: 1000}, sideInfo{mmr: 1000}, tails, false},
+	}
+	for _, c := range cases {
+		if got := aGoesFirst(c.a, c.b, c.coin); got != c.want {
+			t.Errorf("%s: aGoesFirst = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

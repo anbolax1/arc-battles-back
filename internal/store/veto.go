@@ -35,31 +35,27 @@ const (
 	FormatShow  = "show"
 )
 
-// VetoOrder - порядок пиков-банов из pool карт, A - меньший MMR или новичок сезона. Два раунда: бан A, бан B,
-// пик A, бан B, бан A, пик B, лишние карты не играются; три - пик A, пик B и баны до последней карты, она в 3-м.
-func VetoOrder(rounds, pool int) []models.VetoStep {
+// VetoOrder - порядок пиков-банов. Два раунда: два бана каждому, затем первую карту берёт B, вторую - A
+// (для баланса у A меньше MMR); три раунда: бан A, бан B, пик A, пик B, третью карту выбирает чат.
+func VetoOrder(rounds int) []models.VetoStep {
 	if rounds != 3 {
 		return []models.VetoStep{
 			{Action: "ban", Side: "A"},
 			{Action: "ban", Side: "B"},
-			{Action: "pick", Side: "A", Round: 1},
-			{Action: "ban", Side: "B"},
 			{Action: "ban", Side: "A"},
-			{Action: "pick", Side: "B", Round: 2},
+			{Action: "ban", Side: "B"},
+			{Action: "pick", Side: "B", Round: 1},
+			{Action: "pick", Side: "A", Round: 2},
 		}
 	}
-	order := []models.VetoStep{
+	return []models.VetoStep{
+		{Action: "ban", Side: "A"},
+		{Action: "ban", Side: "B"},
 		{Action: "pick", Side: "A", Round: 1},
 		{Action: "pick", Side: "B", Round: 2},
+		{Action: "vote", Round: 3},
 	}
-	for i := 0; i < pool-3; i++ {
-		order = append(order, models.VetoStep{Action: "ban", Side: [2]string{"A", "B"}[i%2]})
-	}
-	return append(order, models.VetoStep{Action: "rest", Round: 3})
 }
-
-// mapPoolSQL - сколько карт сейчас в пуле пиков-банов.
-const mapPoolSQL = `SELECT COUNT(*) FROM maps WHERE active`
 
 // MatchRounds - сколько раундов будет в новом матче: у шоу-матча всегда три, обычный - два или три.
 func MatchRounds(format string, rounds int) int {
@@ -142,11 +138,7 @@ func (s *Store) VetoMap(ctx context.Context, tournamentID, mapCode string) error
 		}
 		return err
 	}
-	var pool int
-	if err := tx.QueryRow(ctx, mapPoolSQL).Scan(&pool); err != nil {
-		return err
-	}
-	order := VetoOrder(rounds, pool)
+	order := VetoOrder(rounds)
 	var done int
 	var used bool
 	if err := tx.QueryRow(ctx, `

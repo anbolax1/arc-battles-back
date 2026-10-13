@@ -109,8 +109,8 @@ type MapInfo struct {
 // VetoAction - ход пиков-банов: бан/пик стороны или оставшаяся карта, ушедшая в раунд.
 type VetoAction struct {
 	Seq         int    `json:"seq"`
-	Action      string `json:"action"` // ban | pick | rest
-	Side        string `json:"side"`   // A | B; у оставшейся карты пусто
+	Action      string `json:"action"` // ban | pick | rest | vote (карту выбрал чат)
+	Side        string `json:"side"`   // A | B; у оставшейся карты и выбора чата пусто
 	MapCode     string `json:"mapCode"`
 	MapName     string `json:"mapName"`
 	RoundNumber *int   `json:"roundNumber,omitempty"`
@@ -118,8 +118,8 @@ type VetoAction struct {
 
 // VetoStep - ход в порядке пиков-банов: кто ходит, что делает и в какой раунд уходит карта.
 type VetoStep struct {
-	Action string `json:"action"` // ban | pick | rest
-	Side   string `json:"side"`   // A | B; у оставшейся карты пусто
+	Action string `json:"action"` // ban | pick | rest | vote (карту выбрал чат)
+	Side   string `json:"side"`   // A | B; у оставшейся карты и выбора чата пусто
 	Round  int    `json:"round,omitempty"`
 }
 
@@ -220,6 +220,7 @@ type MatchPlayer struct {
 	Losses        int    `json:"losses"`
 	IsNew         bool   `json:"isNew"` // в текущем сезоне ещё не играл
 	IsPlaceholder bool   `json:"isPlaceholder"`
+	PrevGames     int    `json:"prevGames"` // матчей в прошлых сезонах: при равном MMR сторона A - у кого меньше
 }
 
 type Tournament struct {

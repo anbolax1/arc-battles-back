@@ -374,7 +374,7 @@ func buildRecap(in recapInput) models.SeasonRecap {
 				switch v.action {
 				case "ban":
 					out.Maps[i].Ban++
-				case "pick":
+				case "pick", "vote":
 					out.Maps[i].Pick++
 				case "rest":
 					out.Maps[i].Rest++
