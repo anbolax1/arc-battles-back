@@ -74,7 +74,7 @@ type patchInput struct {
 	matches   []patchMatch // по времени
 	fixes     []patchMmrFix
 	prevGames map[string]int // матчей в прошлом сезоне
-	prevChamp string         // чемпион прошлого сезона: с ним сезон начинает пояс
+	belt      beltSeason     // пояс лиги в этом сезоне: кто вошёл в сезон с поясом и кто взял его в матчах
 	leader    string         // первое место таблицы сезона
 	leaderMmr int
 }
@@ -93,7 +93,6 @@ type patchPlayer struct {
 	streak, bestStreak          int
 	knocks                      int
 	david, comeback, double     int
-	reigns, defenses            int
 	lostTo                      map[string]bool
 	mapWins                     map[string]int
 	bestRound                   map[string]any
@@ -150,10 +149,8 @@ func computeSeasonPatches(in patchInput) []patchAward {
 		lastDay, lastAt = patchDay(m.at), m.at
 	}
 
-	holder := in.prevChamp
-	if holder != "" {
-		get(holder).reigns = 1
-		award(holder, "belt", 1, "", in.season.StartedAt, nil)
+	if in.belt.start != "" {
+		award(in.belt.start, "belt", 1, "", in.season.StartedAt, nil)
 	}
 
 	// Сверка в один момент с матчем идёт раньше него, как в пересчёте MMR.
@@ -299,12 +296,7 @@ func computeSeasonPatches(in patchInput) []patchAward {
 				award(w.user, "revenge", 1, m.id, m.at, map[string]any{"opp": l.name})
 			}
 			pl.lostTo[w.user] = true
-			switch holder {
-			case w.user:
-				pw.defenses++
-			case l.user:
-				holder = w.user
-				pw.reigns++
+			if in.belt.takes[m.id] == w.user {
 				award(w.user, "belt", 1, m.id, m.at, nil)
 			}
 			for _, mp := range m.maps {
@@ -420,7 +412,7 @@ func computeSeasonPatches(in patchInput) []patchAward {
 		case "veteran":
 			a.detail = map[string]any{"games": in.prevGames[a.user]}
 		case "belt":
-			a.detail = map[string]any{"reigns": p.reigns, "defenses": p.defenses}
+			a.detail = map[string]any{"reigns": in.belt.reigns[a.user], "defenses": in.belt.defenses[a.user]}
 		}
 		if a.detail == nil {
 			a.detail = map[string]any{}
@@ -683,9 +675,6 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 		for _, r := range rows {
 			in.prevGames[r.UserID] = r.Tournaments
 		}
-		if prev.Status == "finished" && len(rows) > 0 {
-			in.prevChamp = rows[0].UserID
-		}
 	}
 	cur, err := s.Leaderboard(ctx, "1x1", sn.ID)
 	if err != nil {
@@ -707,8 +696,8 @@ type PatchNew struct {
 // patchSyncLock - номер блокировки пересчёта нашивок: два пересчёта сразу столкнулись бы на вставке.
 const patchSyncLock = 7461
 
-// SyncPatches пересчитывает нашивки всех сезонов и возвращает новые - их не было до пересчёта и они
-// не предварительные: по ним оверлей показывает плашку.
+// SyncPatches пересчитывает нашивки всех сезонов и тег почётного носителя пояса, возвращает новые нашивки -
+// их не было до пересчёта и они не предварительные: по ним оверлей показывает плашку.
 func (s *Store) SyncPatches(ctx context.Context) ([]PatchNew, error) {
 	seasons, err := s.ListSeasons(ctx)
 	if err != nil {
@@ -725,6 +714,12 @@ func (s *Store) SyncPatches(ctx context.Context) ([]PatchNew, error) {
 		return nil, err
 	}
 
+	beltIn, _, err := s.loadBeltInput(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("пояс: %w", err)
+	}
+	belt := computeBelt(beltIn, time.Now())
+
 	awards := map[string][]patchAward{}
 	for i, sn := range seasons {
 		var prev *models.Season
@@ -735,6 +730,7 @@ func (s *Store) SyncPatches(ctx context.Context) ([]PatchNew, error) {
 		if err != nil {
 			return nil, fmt.Errorf("сезон %s: %w", sn.Name, err)
 		}
+		in.belt = belt.forSeason(sn)
 		awards[sn.ID] = computeSeasonPatches(in)
 	}
 
@@ -785,6 +781,9 @@ func (s *Store) SyncPatches(ctx context.Context) ([]PatchNew, error) {
 		if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 			return nil, err
 		}
+	}
+	if err := syncHonorTag(ctx, tx, belt.honored()); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

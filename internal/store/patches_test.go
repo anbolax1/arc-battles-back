@@ -148,7 +148,9 @@ func TestPatchScoresAndLeader(t *testing.T) {
 
 func TestPatchBeltAndSeasonEnd(t *testing.T) {
 	c := newPatchCase("finished")
-	c.in.prevChamp = "makar"
+	// пояс лиги считается отдельно: makar вошёл в сезон с поясом, eden забрал его во втором матче
+	c.in.belt = beltSeason{start: "makar", takes: map[string]string{"mb": "eden"},
+		reigns: map[string]int{"makar": 1, "eden": 1}, defenses: map[string]int{"makar": 1, "eden": 1}}
 	c.in.prevGames = map[string]int{"makar": 25}
 	c.in.leader, c.in.leaderMmr = "eden", 1300
 	c.match(0, sideSpec{user: "makar"}, sideSpec{user: "x"})

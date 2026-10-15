@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"sort"
 
 	"github.com/battle-for-respect/backend/internal/models"
@@ -24,6 +25,11 @@ func (s *Server) publishMatchState(ctx context.Context, st models.MatchState) {
 	_ = json.Unmarshal(data, &stored)
 	ls := buildMatchLiveState(st, stored)
 	s.addStandingRatings(ctx, st, &ls)
+	if belt, err := s.Store.MatchBelt(ctx, st); err == nil {
+		ls.Belt = belt
+	} else {
+		log.Printf("пояс для оверлея: %v", err)
+	}
 	norm, err := json.Marshal(ls)
 	if err != nil {
 		return

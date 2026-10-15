@@ -67,10 +67,11 @@ type UserTag struct {
 }
 
 // Tag - тег в кабинете вместе с теми, кому он выдан. Тег с ролью есть у всех с этой ролью и выше,
-// тег с сезоном выдаётся сам победителю сезона.
+// тег с сезоном выдаётся сам победителю сезона, тег с кодом сайт выдаёт сам по своему правилу.
 type Tag struct {
 	UserTag
 	Role        string      `json:"role,omitempty"`
+	Code        string      `json:"code,omitempty"` // например, honor - «Почётный носитель» пояса лиги
 	SeasonID    *string     `json:"seasonId,omitempty"`
 	SeasonName  string      `json:"seasonName,omitempty"`
 	HolderCount int         `json:"holderCount"`
@@ -738,6 +739,9 @@ type LiveState struct {
 
 	// Нашивки, полученные в идущем матче: оверлей показывает каждую новую плашкой по очереди.
 	PatchFlashes []PatchFlash `json:"patchFlashes,omitempty"`
+
+	// Матч идёт за пояс лиги: табло отмечает носителя, а после матча - итог.
+	Belt *LiveBelt `json:"belt,omitempty"`
 }
 
 // OverlayLayout — документ раскладки оверлея: набор независимых виджетов с

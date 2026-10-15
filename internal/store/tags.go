@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ErrAutoTag - тег роли или победителя сезона выдаёт сайт: его не удалить и не выдать вручную.
+// ErrAutoTag - тег роли, победителя сезона или тег с кодом выдаёт сайт: его не удалить и не выдать вручную.
 var ErrAutoTag = errors.New("тег выдаётся автоматически")
 
 // winnerTagColor - золотой, как у бейджа чемпиона.
@@ -26,10 +26,10 @@ func seasonWinnerTagName(season string) string {
 	return "Чемпион: " + name
 }
 
-const tagCols = `t.id, t.name, t.color, t.visible, COALESCE(t.role, ''), t.season_id, COALESCE(sn.name, '')`
+const tagCols = `t.id, t.name, t.color, t.visible, COALESCE(t.role, ''), COALESCE(t.code, ''), t.season_id, COALESCE(sn.name, '')`
 
-// tagOrder - сначала роли, затем победители сезонов (свежие выше), затем остальные.
-const tagOrder = `(t.role IS NULL), (t.season_id IS NULL), sn.started_at DESC`
+// tagOrder - сначала роли, затем победители сезонов (свежие выше), теги с кодом, затем остальные.
+const tagOrder = `(t.role IS NULL), (t.season_id IS NULL), (t.code IS NULL), sn.started_at DESC`
 
 // roleLevel - уровень роли из колонки col по той же иерархии, что и права доступа; 0 - не роль.
 func roleLevel(col string) string {
@@ -49,11 +49,11 @@ func holdsRoleTag(user, tag string) string {
 
 func scanTag(row pgx.Row) (models.Tag, error) {
 	var t models.Tag
-	err := row.Scan(&t.ID, &t.Name, &t.Color, &t.Visible, &t.Role, &t.SeasonID, &t.SeasonName)
+	err := row.Scan(&t.ID, &t.Name, &t.Color, &t.Visible, &t.Role, &t.Code, &t.SeasonID, &t.SeasonName)
 	return t, err
 }
 
-func autoTag(t models.Tag) bool { return t.Role != "" || t.SeasonID != nil }
+func autoTag(t models.Tag) bool { return t.Role != "" || t.SeasonID != nil || t.Code != "" }
 
 // ListTags - все теги с теми, кому они выданы; у тега роли вместо списка - сколько у него держателей.
 func (s *Store) ListTags(ctx context.Context) ([]models.Tag, error) {
@@ -70,7 +70,7 @@ func (s *Store) ListTags(ctx context.Context) ([]models.Tag, error) {
 	byID := map[string]int{}
 	for rows.Next() {
 		var t models.Tag
-		if err := rows.Scan(&t.ID, &t.Name, &t.Color, &t.Visible, &t.Role, &t.SeasonID, &t.SeasonName, &t.HolderCount); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Color, &t.Visible, &t.Role, &t.Code, &t.SeasonID, &t.SeasonName, &t.HolderCount); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -292,4 +292,31 @@ func (s *Store) SyncSeasonWinnerTags(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// honorTagCode - код тега «Почётный носитель» пояса лиги.
+const honorTagCode = "honor"
+
+// syncHonorTag выдаёт тег «Почётный носитель» ровно тем, у кого набралось нужное число защит пояса.
+// Тег заводится при первом почётном носителе; название и цвет потом меняет организатор.
+func syncHonorTag(ctx context.Context, tx pgx.Tx, users []string) error {
+	var tagID string
+	err := tx.QueryRow(ctx, `SELECT id FROM tags WHERE code = $1`, honorTagCode).Scan(&tagID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if len(users) == 0 {
+			return nil
+		}
+		err = tx.QueryRow(ctx,
+			`INSERT INTO tags (name, color, code) VALUES ('Почётный носитель', $1, $2) RETURNING id`,
+			winnerTagColor, honorTagCode).Scan(&tagID)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM user_tags WHERE tag_id = $1 AND NOT (user_id = ANY($2))`, tagID, users); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_tags (user_id, tag_id) SELECT u, $1 FROM unnest($2::text[]) AS u ON CONFLICT DO NOTHING`, tagID, users)
+	return err
 }

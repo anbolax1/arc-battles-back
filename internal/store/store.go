@@ -6,8 +6,9 @@ import "github.com/jackc/pgx/v5/pgxpool"
 type Store struct {
 	Pool   *pgxpool.Pool
 	recaps *recapCache
+	belt   *beltCache
 }
 
 func New(pool *pgxpool.Pool) *Store {
-	return &Store{Pool: pool, recaps: &recapCache{items: map[string]recapEntry{}}}
+	return &Store{Pool: pool, recaps: &recapCache{items: map[string]recapEntry{}}, belt: &beltCache{}}
 }
