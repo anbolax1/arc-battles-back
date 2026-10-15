@@ -45,7 +45,7 @@ func main() {
 	if err := st.SyncSeasonWinnerTags(ctx); err != nil {
 		log.Printf("теги чемпионов сезонов: %v", err)
 	}
-	// Нашивки догоняют матчи, изменённые в обход сервера: импорт, перенос с arcarena, новые правила.
+	// Нашивки догоняют матчи, изменённые в обход сервера: импорт, новые правила.
 	if _, err := st.SyncPatches(ctx); err != nil {
 		log.Printf("нашивки: %v", err)
 	}

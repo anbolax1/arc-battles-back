@@ -233,8 +233,8 @@ func (s *Store) SetTagHiddenByUser(ctx context.Context, userID, tagID string, hi
 	return err
 }
 
-// winnerTagLock - номер блокировки выдачи тегов чемпионов: сервер и перенос матчей с arcarena
-// пересчитывают их одновременно.
+// winnerTagLock - номер блокировки выдачи тегов чемпионов: их может пересчитывать сразу несколько
+// запросов сервера или сервер вместе с импортом матчей.
 const winnerTagLock = 7462
 
 // SyncSeasonWinnerTags выдаёт тег чемпиона сезонам, у которых наступила дата окончания: держатель
