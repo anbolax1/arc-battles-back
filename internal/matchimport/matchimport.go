@@ -261,7 +261,8 @@ func catalogTask(ctx context.Context, tx pgx.Tx, t Task) (string, error) {
 	var id string
 	err := tx.QueryRow(ctx, `
 		SELECT id FROM catalog_tasks
-		WHERE lower(name) = lower($1) AND category = $2 AND COALESCE(map_code, '') = $3
+		WHERE lower(name) = lower($1) AND category = $2
+		  AND (($3 = '' AND cardinality(map_codes) = 0) OR $3 = ANY(map_codes))
 		ORDER BY (kind = 'pvp') DESC, active DESC LIMIT 1`, t.Name, t.Category, t.MapCode).Scan(&id)
 	if err == nil {
 		return id, nil
@@ -269,14 +270,13 @@ func catalogTask(ctx context.Context, tx pgx.Tx, t Task) (string, error) {
 	if err != pgx.ErrNoRows {
 		return "", err
 	}
-	var code *string
+	codes := []string{}
 	if t.MapCode != "" {
-		c := t.MapCode
-		code = &c
+		codes = append(codes, t.MapCode)
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO catalog_tasks (name, text, points, value_type, kind, source, category, map_code, active, sort_order)
+		INSERT INTO catalog_tasks (name, text, points, value_type, kind, source, category, map_codes, active, sort_order)
 		VALUES ($1, $2, $3, 'fixed', 'pvp', 'official', $4, $5, false, 5000) RETURNING id`,
-		t.Name, t.Text, t.Points, t.Category, code).Scan(&id)
+		t.Name, t.Text, t.Points, t.Category, codes).Scan(&id)
 	return id, err
 }

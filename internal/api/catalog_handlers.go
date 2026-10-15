@@ -34,17 +34,17 @@ func defaultStr(v, def string) string {
 // ---- Задания ----
 
 type taskBody struct {
-	Text      string `json:"text"`
-	Points    int    `json:"points"`
-	ValueType string `json:"valueType"`
-	Kind      string `json:"kind"`
-	Source    string `json:"source"`
-	Author    string `json:"author"`
-	Title     string `json:"title"`
-	Name      string `json:"name"`
-	Category  string `json:"category"`
-	MapCode   string `json:"mapCode"`
-	Active    *bool  `json:"active"`
+	Text      string   `json:"text"`
+	Points    int      `json:"points"`
+	ValueType string   `json:"valueType"`
+	Kind      string   `json:"kind"`
+	Source    string   `json:"source"`
+	Author    string   `json:"author"`
+	Title     string   `json:"title"`
+	Name      string   `json:"name"`
+	Category  string   `json:"category"`
+	MapCodes  []string `json:"mapCodes"`
+	Active    *bool    `json:"active"`
 }
 
 func (b taskBody) toModel() (models.CatalogTask, string, bool) {
@@ -78,7 +78,7 @@ func (b taskBody) toModel() (models.CatalogTask, string, bool) {
 		Title:     strings.TrimSpace(b.Title),
 		Name:      strings.Trim(strings.TrimSpace(b.Name), "«»"),
 		Category:  category,
-		MapCode:   strings.TrimSpace(b.MapCode),
+		MapCodes:  b.MapCodes,
 		Active:    active,
 	}, vt, true
 }

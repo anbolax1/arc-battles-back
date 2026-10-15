@@ -394,7 +394,7 @@ func (s *Store) pickTask(ctx context.Context, tournamentID, playerType string, s
 		SELECT ct.id FROM catalog_tasks ct
 		WHERE ct.active AND ct.category = $3
 		  AND ($2 = 'pvpve' OR ct.kind = $2 OR ct.kind = 'pvpve')
-		  AND (($4 = '' AND ct.map_code IS NULL) OR ct.map_code = NULLIF($4, ''))
+		  AND (($4 = '' AND cardinality(ct.map_codes) = 0) OR $4 = ANY(ct.map_codes))
 		  AND ct.id <> $5
 		  AND ct.id NOT IN (
 		      SELECT rbt.task_id FROM round_bonus_tasks rbt JOIN rounds r ON r.id = rbt.round_id
@@ -416,17 +416,18 @@ func mapForSlot(sl taskSlot, mapCode string) string {
 
 // RerollTask меняет невыполненное задание на другое того же вида (выпало невыполнимое).
 func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
-	var tournamentID, playerType, taskID, category, taskMap, roundMap string
+	var tournamentID, playerType, taskID, category, roundMap string
+	var onMap bool
 	var completed *string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT r.tournament_id, t.player_type, rbt.task_id, ct.category, COALESCE(ct.map_code, ''),
+		SELECT r.tournament_id, t.player_type, rbt.task_id, ct.category, cardinality(ct.map_codes) > 0,
 		       COALESCE(r.map_code, ''), rbt.completed_by
 		FROM round_bonus_tasks rbt
 		JOIN rounds r ON r.id = rbt.round_id
 		JOIN tournaments t ON t.id = r.tournament_id
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		WHERE rbt.id = $1`, assignmentID).
-		Scan(&tournamentID, &playerType, &taskID, &category, &taskMap, &roundMap, &completed)
+		Scan(&tournamentID, &playerType, &taskID, &category, &onMap, &roundMap, &completed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -436,7 +437,7 @@ func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
 	if completed != nil {
 		return ErrConflict
 	}
-	sl := taskSlot{category: category, onMap: taskMap != ""}
+	sl := taskSlot{category: category, onMap: onMap}
 	next, err := s.pickTask(ctx, tournamentID, playerType, sl, roundMap, taskID)
 	if err != nil {
 		return err

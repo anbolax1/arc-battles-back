@@ -11,7 +11,10 @@ import (
 // Контракты (бывш. бонусные задания). Владелец контракта = participant_id (кому выдан).
 // completed_by — кто фактически выполнил: владелец → +2 балла, противник → +1 балл, NULL → не выполнен.
 const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, ct.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
-	ct.name, ct.category, COALESCE(ct.map_code, '')`
+	ct.name, ct.category, ` + dealtTaskMap
+
+// dealtTaskMap - карта выданного задания: у задания на картах это карта раунда, у общего - пусто.
+const dealtTaskMap = `CASE WHEN cardinality(ct.map_codes) > 0 THEN COALESCE(r.map_code, '') ELSE '' END`
 
 func scanRoundBonusTask(row pgx.Row) (models.RoundBonusTask, error) {
 	var t models.RoundBonusTask
@@ -29,7 +32,7 @@ func (s *Store) ListTournamentBonusTasks(ctx context.Context, tournamentID strin
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		JOIN rounds r ON r.id = rbt.round_id
 		WHERE r.tournament_id = $1
-		ORDER BY r.number, rbt.participant_id, ct.category, ct.map_code NULLS FIRST, ct.text`, tournamentID)
+		ORDER BY r.number, rbt.participant_id, ct.category, cardinality(ct.map_codes) > 0, ct.text`, tournamentID)
 	if err != nil {
 		return nil, err
 	}

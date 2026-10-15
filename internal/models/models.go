@@ -609,18 +609,18 @@ const (
 )
 
 type CatalogTask struct {
-	ID        string `json:"id"`
-	Text      string `json:"text"`
-	Points    int    `json:"points"`    // величина: баллы (fixed) или процент (percent)
-	ValueType string `json:"valueType"` // fixed | percent
-	Kind      string `json:"kind"`      // pve | pvp | pvpve
-	Source    string `json:"source"`    // official | boosty
-	Author    string `json:"author,omitempty"`
-	Title     string `json:"title,omitempty"`
-	Name      string `json:"name,omitempty"`    // название задания, например «Голыми руками»
-	Category  string `json:"category"`          // task | protocol
-	MapCode   string `json:"mapCode,omitempty"` // задание на карту; пусто - универсальное
-	Active    bool   `json:"active"`            // выключенные не раздаются, но остаются в истории
+	ID        string   `json:"id"`
+	Text      string   `json:"text"`
+	Points    int      `json:"points"`    // величина: баллы (fixed) или процент (percent)
+	ValueType string   `json:"valueType"` // fixed | percent
+	Kind      string   `json:"kind"`      // pve | pvp | pvpve
+	Source    string   `json:"source"`    // official | boosty
+	Author    string   `json:"author,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Name      string   `json:"name,omitempty"` // название задания, например «Голыми руками»
+	Category  string   `json:"category"`       // task | protocol
+	MapCodes  []string `json:"mapCodes"`       // карты задания; пусто - общее, на любую карту
+	Active    bool     `json:"active"`         // выключенные не раздаются, но остаются в истории
 }
 
 type CatalogComplication struct {

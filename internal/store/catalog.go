@@ -2,17 +2,23 @@ package store
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/jackc/pgx/v5"
 )
 
-const taskCols = `id, text, points, value_type, kind, source, author, title, name, category, COALESCE(map_code, ''), active`
+const taskCols = `id, text, points, value_type, kind, source, author, title, name, category, map_codes, active`
+
+// taskMaps - карты задания из параметра $n без несуществующих и повторов, в порядке карт на сайте.
+func taskMaps(n int) string {
+	return fmt.Sprintf(`ARRAY(SELECT code FROM maps WHERE code = ANY($%d::text[]) ORDER BY sort_order)`, n)
+}
 
 func scanTask(row pgx.Row) (models.CatalogTask, error) {
 	var t models.CatalogTask
 	err := row.Scan(&t.ID, &t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Source, &t.Author, &t.Title,
-		&t.Name, &t.Category, &t.MapCode, &t.Active)
+		&t.Name, &t.Category, &t.MapCodes, &t.Active)
 	return t, err
 }
 
@@ -20,7 +26,7 @@ func scanTask(row pgx.Row) (models.CatalogTask, error) {
 func (s *Store) ListCatalogTasks(ctx context.Context) ([]models.CatalogTask, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT `+taskCols+` FROM catalog_tasks
-		ORDER BY active DESC, category DESC, kind, map_code NULLS FIRST, sort_order, text`)
+		ORDER BY active DESC, category DESC, kind, map_codes, sort_order, text`)
 	if err != nil {
 		return nil, err
 	}
@@ -37,31 +43,24 @@ func (s *Store) ListCatalogTasks(ctx context.Context) ([]models.CatalogTask, err
 	return out, rows.Err()
 }
 
-func nullIfEmpty(v string) *string {
-	if v == "" {
-		return nil
-	}
-	return &v
-}
-
 func (s *Store) CreateCatalogTask(ctx context.Context, t models.CatalogTask) (models.CatalogTask, error) {
-	const q = `
-		INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, category, map_code, active, sort_order)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
+	q := `
+		INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, category, map_codes, active, sort_order)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ` + taskMaps(10) + `, $11, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
 		RETURNING ` + taskCols
 	return scanTask(s.Pool.QueryRow(ctx, q, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author, t.Title,
-		t.Name, t.Category, nullIfEmpty(t.MapCode), t.Active))
+		t.Name, t.Category, t.MapCodes, t.Active))
 }
 
 func (s *Store) UpdateCatalogTask(ctx context.Context, id string, t models.CatalogTask) (models.CatalogTask, error) {
-	const q = `
+	q := `
 		UPDATE catalog_tasks
 		SET text = $2, points = $3, value_type = $4, kind = $5, source = $6, author = $7, title = $8,
-		    name = $9, category = $10, map_code = $11, active = $12
+		    name = $9, category = $10, map_codes = ` + taskMaps(11) + `, active = $12
 		WHERE id = $1
 		RETURNING ` + taskCols
 	return scanTask(s.Pool.QueryRow(ctx, q, id, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author, t.Title,
-		t.Name, t.Category, nullIfEmpty(t.MapCode), t.Active))
+		t.Name, t.Category, t.MapCodes, t.Active))
 }
 
 // DeleteCatalogTask удаляет задание. Если оно уже выдавалось в матчах, удалить нельзя (иначе
