@@ -589,6 +589,14 @@ type News struct {
 	Published   bool       `json:"published"` // дата публикации наступила - новость видна на сайте
 	CreatedAt   time.Time  `json:"createdAt"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
+	Belt        *NewsBelt  `json:"belt,omitempty"` // новость о поясе лиги, её написал сам сайт
+}
+
+// NewsBelt - рисунок пояса у новости о нём, пока организатор не поставил свою картинку.
+type NewsBelt struct {
+	Name   string `json:"name"`             // ник на поясе
+	Stars  int    `json:"stars"`            // звёзды защит
+	Vacant bool   `json:"vacant,omitempty"` // пояс выпал и ничей
 }
 
 // UserOverview — пользователь + агрегаты участия для раздела «Пользователи» в кабинете.

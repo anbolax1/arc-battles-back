@@ -15,6 +15,8 @@ var newsPolicy = func() *bluemonday.Policy {
 	p.AllowAttrs("class").Matching(regexp.MustCompile(`^tg-spoiler$`)).OnElements("span")
 	p.AllowAttrs("href").OnElements("a")
 	p.AllowURLSchemes("http", "https", "mailto", "tg")
+	// Свои страницы - относительной ссылкой: новость открывается на любом из доменов сайта, в той же вкладке.
+	p.AllowRelativeURLs(true)
 	p.RequireParseableURLs(true)
 	p.RequireNoFollowOnLinks(true)
 	p.RequireNoReferrerOnLinks(true)

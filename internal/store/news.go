@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -9,16 +10,23 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const newsCols = `id, title, body, image_path, published_at, COALESCE(published_at <= now(), false), created_at, updated_at`
+const newsCols = `id, title, body, image_path, published_at, COALESCE(published_at <= now(), false), created_at, updated_at, belt`
 
 func scanNews(row pgx.Row) (models.News, error) {
 	var n models.News
 	var image string
-	if err := row.Scan(&n.ID, &n.Title, &n.Body, &image, &n.PublishedAt, &n.Published, &n.CreatedAt, &n.UpdatedAt); err != nil {
+	var belt []byte
+	if err := row.Scan(&n.ID, &n.Title, &n.Body, &image, &n.PublishedAt, &n.Published, &n.CreatedAt, &n.UpdatedAt, &belt); err != nil {
 		return n, err
 	}
 	if image != "" {
 		n.ImageURL = "/media/" + image
+	}
+	if len(belt) > 0 {
+		n.Belt = &models.NewsBelt{}
+		if err := json.Unmarshal(belt, n.Belt); err != nil {
+			return n, err
+		}
 	}
 	return n, nil
 }

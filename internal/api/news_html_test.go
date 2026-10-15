@@ -21,6 +21,7 @@ func TestNewsHTML(t *testing.T) {
 			`<a href="https://brouhub.ru/rules" target="_self" onclick="z()">правила</a>`,
 			`<a href="https://brouhub.ru/rules" rel="nofollow noreferrer noopener" target="_blank">правила</a>`,
 		},
+		{"своя страница - относительной ссылкой в той же вкладке", `<a href="/belt">пояс</a>`, `<a href="/belt" rel="nofollow noreferrer">пояс</a>`},
 		{"javascript-ссылка теряет адрес", `<a href="javascript:alert(1)">тык</a>`, `тык`},
 		{"чужой класс и стиль у span срезаются", `<p><span class="x" style="color:red">т</span></p>`, `<p><span>т</span></p>`},
 		{"пустой абзац - пустой текст", `<p></p><p> </p>`, ``},

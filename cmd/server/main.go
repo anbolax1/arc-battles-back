@@ -74,12 +74,15 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Дата окончания сезона наступает сама по себе - тег чемпиона проверяется раз в минуту.
+	// Дата окончания сезона и полночь, когда выпадает пояс, наступают сами по себе: тег чемпиона и новости
+	// о поясе проверяются раз в минуту.
+	srv.SyncBeltNews(ctx)
 	go func() {
 		for range time.Tick(time.Minute) {
 			if err := st.SyncSeasonWinnerTags(ctx); err != nil {
 				log.Printf("теги чемпионов сезонов: %v", err)
 			}
+			srv.SyncBeltNews(ctx)
 		}
 	}()
 
