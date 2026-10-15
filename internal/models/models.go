@@ -693,6 +693,7 @@ type LiveStanding struct {
 	Mmr           int    `json:"mmr,omitempty"`      // MMR сезона; после матча - уже с его итогом
 	MmrDelta      int    `json:"mmrDelta,omitempty"` // изменение MMR за завершённый матч
 	Place         int    `json:"place,omitempty"`    // место в таблице 1×1 сезона; 0 - в сезоне ещё не играл
+	IsNew         bool   `json:"isNew,omitempty"`    // игрок в сезоне ещё не играл, места в таблице у него нет
 }
 
 // LiveBonus — контракт стороны в оверлее (виджет «Контракты»).
@@ -729,7 +730,7 @@ type LiveState struct {
 	// пустые при дефолтном табло. Singular complication выше оставлен для совместимости.
 	RoundTasks    []Task             `json:"roundTasks,omitempty"`    // стартовые задания текущего раунда
 	BonusTasks    []LiveBonus        `json:"bonusTasks,omitempty"`    // бонусные фокусной стороны
-	Complications []LiveComplication `json:"complications,omitempty"` // усложнения обеих сторон
+	Complications []LiveComplication `json:"complications,omitempty"` // протоколы: в матче - стороны в рейде, в старом пульте - обеих сторон
 
 	// Кастомизируемая раскладка оверлея (модульные виджеты). Если nil — оверлей
 	// рендерит дефолтную раскладку (источник дефолта — фронт). Чтобы пуш раскладки
@@ -789,7 +790,6 @@ type WidgetInstance struct {
 	Visible        bool            `json:"visible"`
 	Locked         bool            `json:"locked,omitempty"`
 	HideTitle      bool            `json:"hideTitle,omitempty"`             // скрыть заголовок/подпись виджета
-	HidePenalty    bool            `json:"hidePenalty,omitempty"`           // усложнения: не показывать плашку «ШТРАФ» при нарушении
 	ShowRoundScore bool            `json:"showRoundScore,omitempty"`        // табло: очки за раунд в скобках у счёта
 	ShowOpponentCs bool            `json:"showOpponentContracts,omitempty"` // контракты: показывать и контракты противника
 	ShowMmr        bool            `json:"showMmr,omitempty"`               // табло: MMR сторон

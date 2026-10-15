@@ -69,7 +69,7 @@ func (s *Server) addStandingRatings(ctx context.Context, st models.MatchState, l
 			sd.Mmr = mmr
 		}
 		if place, err := s.Store.Player1x1Place(ctx, uid); err == nil {
-			sd.Place = place
+			sd.Place, sd.IsNew = place, place == 0
 		}
 	}
 }
@@ -171,15 +171,16 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 		}
 		done := task.CompletedBy != nil && *task.CompletedBy == task.ParticipantID
 		if task.Category == "protocol" {
+			// Протокол выполняет только его владелец, поэтому оверлей показывает протокол стороны в рейде.
+			if task.ParticipantID != focus.ID {
+				continue
+			}
 			c := models.LiveComplication{
 				Who: nameOf[task.ParticipantID], Text: overlayTaskText(task), ValueType: models.ValueFixed,
 				Reward: task.Points, Done: done,
 			}
 			ls.Complications = append(ls.Complications, c)
-			if task.ParticipantID == focus.ID {
-				cc := c
-				ls.Complication = &cc
-			}
+			ls.Complication = &c
 			continue
 		}
 		b := models.LiveBonus{

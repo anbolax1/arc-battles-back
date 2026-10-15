@@ -231,23 +231,19 @@ func (s *Store) Player1x1KnocksBySeason(ctx context.Context, userID string) (map
 	return out, rows.Err()
 }
 
-// Player1x1Place - место игрока в таблице 1×1 текущего сезона (0 - если в этом сезоне не играл).
+// Player1x1Place - место игрока в таблице 1×1 текущего сезона, как на странице рейтинга: по MMR,
+// при равном - по победам; 0 - в этом сезоне ещё не играл.
 func (s *Store) Player1x1Place(ctx context.Context, userID string) (int, error) {
-	var myMmr *int
-	if err := s.Pool.QueryRow(ctx,
-		`SELECT mmr FROM user_mmr WHERE user_id=$1 AND mode='1x1'`, userID).Scan(&myMmr); err != nil {
-		// нет строки → не играл
-		return 0, nil
-	}
-	if myMmr == nil {
-		return 0, nil
-	}
-	var above int
-	if err := s.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM user_mmr WHERE mode='1x1' AND mmr > $1`, *myMmr).Scan(&above); err != nil {
+	rows, err := s.Leaderboard(ctx, "1x1", s.activeSeasonRule(ctx).Key)
+	if err != nil {
 		return 0, err
 	}
-	return above + 1, nil
+	for i, r := range rows {
+		if r.UserID == userID {
+			return i + 1, nil
+		}
+	}
+	return 0, nil
 }
 
 // ================== 2×2 (команды) ==================
