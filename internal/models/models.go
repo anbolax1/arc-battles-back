@@ -802,6 +802,7 @@ type WidgetInstance struct {
 	ShowOpponentCs bool            `json:"showOpponentContracts,omitempty"` // контракты: показывать и контракты противника
 	ShowMmr        bool            `json:"showMmr,omitempty"`               // табло: MMR сторон
 	ShowPlace      bool            `json:"showPlace,omitempty"`             // табло: места сторон в таблице сезона
+	ShowBelt       bool            `json:"showBelt,omitempty"`              // табло: значок у носителя пояса лиги
 	Anchor         string          `json:"anchor,omitempty"`                // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
 	Bg             OverlayBg       `json:"bg"`
 	Accent         string          `json:"accent,omitempty"`
