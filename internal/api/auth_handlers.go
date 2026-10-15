@@ -111,7 +111,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "не удалось создать сессию")
 		return
 	}
-	s.setSessionCookie(w, token)
+	s.setSessionCookie(w, r, token)
 	writeJSON(w, http.StatusCreated, u)
 }
 
@@ -169,7 +169,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "не удалось создать сессию")
 		return
 	}
-	s.setSessionCookie(w, token)
+	s.setSessionCookie(w, r, token)
 
 	u, err := s.Store.GetUser(r.Context(), id)
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if u, ok := userFrom(r.Context()); ok {
 		_ = s.Store.RevokeSessions(r.Context(), u.ID)
 	}
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -9,14 +9,15 @@ import (
 
 // Config — все настройки сервиса, читаются из переменных окружения (и из .env при наличии).
 type Config struct {
-	BindAddr     string // адрес прослушивания (в проде — 127.0.0.1:PORT за nginx); пусто → ":"+Port
-	Port         string
-	DatabaseURL  string
-	JWTSecret    string
-	FrontendURL  string
-	CookieDomain string
-	CookieSecure bool
-	TrustProxy   bool // за обратным прокси (nginx) брать IP из X-Real-IP; иначе только из TCP-соединения
+	BindAddr    string // адрес прослушивания (в проде — 127.0.0.1:PORT за nginx); пусто → ":"+Port
+	Port        string
+	DatabaseURL string
+	JWTSecret   string
+	FrontendURL string
+	// Домены сессионной cookie: сайт открыт на нескольких, cookie ставится на тот, куда пришёл запрос
+	CookieDomains []string
+	CookieSecure  bool
+	TrustProxy    bool // за обратным прокси (nginx) брать IP из X-Real-IP; иначе только из TCP-соединения
 
 	// Бутстрап организатора: при старте гарантируется аккаунт SuperadminLogin с ролью superadmin.
 	// Пароль организатора управляется этим SuperadminPassword — задаётся/обновляется на старте.
@@ -44,7 +45,7 @@ func Load() Config {
 		DatabaseURL:        env("DATABASE_URL", "postgres://respect:respect@localhost:5433/respect?sslmode=disable"),
 		JWTSecret:          env("JWT_SECRET", devJWTSecret),
 		FrontendURL:        env("FRONTEND_URL", "http://localhost:3000"),
-		CookieDomain:       env("COOKIE_DOMAIN", ""),
+		CookieDomains:      splitList(env("COOKIE_DOMAIN", "")),
 		CookieSecure:       env("COOKIE_SECURE", "false") == "true",
 		TrustProxy:         env("TRUST_PROXY", "false") == "true",
 		SuperadminLogin:    strings.TrimSpace(env("SUPERADMIN_LOGIN", "Istwood")),
@@ -85,6 +86,16 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // loadDotEnv — простой парсер .env без внешних зависимостей.

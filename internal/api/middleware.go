@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -103,12 +104,27 @@ func (s *Server) blockIfFinished(w http.ResponseWriter, status string) bool {
 	return false
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {
+// cookieDomain - домен из COOKIE_DOMAIN, к которому относится адрес запроса. Cookie чужого
+// домена браузер отбросит, поэтому без совпадения cookie ставится только на текущий адрес.
+func (s *Server) cookieDomain(r *http.Request) string {
+	host := strings.ToLower(r.Host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	for _, d := range s.Cfg.CookieDomains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return d
+		}
+	}
+	return ""
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
-		Domain:   s.Cfg.CookieDomain,
+		Domain:   s.cookieDomain(r),
 		HttpOnly: true,
 		Secure:   s.Cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,
@@ -116,12 +132,12 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {
 	})
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    "",
 		Path:     "/",
-		Domain:   s.Cfg.CookieDomain,
+		Domain:   s.cookieDomain(r),
 		HttpOnly: true,
 		Secure:   s.Cfg.CookieSecure,
 		SameSite: http.SameSiteLaxMode,

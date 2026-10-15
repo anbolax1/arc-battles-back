@@ -104,6 +104,6 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "не удалось создать сессию")
 		return
 	}
-	s.setSessionCookie(w, jwt)
+	s.setSessionCookie(w, r, jwt)
 	writeJSON(w, http.StatusOK, u)
 }
