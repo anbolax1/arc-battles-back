@@ -8,13 +8,13 @@ import (
 )
 
 func TestCookieDomain(t *testing.T) {
-	s := &Server{Cfg: config.Config{CookieDomains: []string{"brouhub.ru", "goarc.ru"}}}
+	s := &Server{Cfg: config.Config{CookieDomains: []string{"brouhub.ru", "goarc.pro"}}}
 	cases := []struct{ host, want string }{
 		{"brouhub.ru", "brouhub.ru"},
 		{"api.brouhub.ru", "brouhub.ru"},
-		{"goarc.ru", "goarc.ru"},
-		{"GoArc.ru:443", "goarc.ru"},
-		{"www.goarc.ru", "goarc.ru"},
+		{"goarc.pro", "goarc.pro"},
+		{"GoArc.pro:443", "goarc.pro"},
+		{"www.goarc.pro", "goarc.pro"},
 		{"notbrouhub.ru", ""},
 		{"155.212.133.147", ""},
 		{"localhost:8080", ""},
