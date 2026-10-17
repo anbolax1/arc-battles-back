@@ -54,6 +54,7 @@ type patchMatch struct {
 	id          string
 	at          time.Time
 	live        bool // матч идёт: в зачёт только ноки
+	show        bool // шоу-матч: в таблицу идёт, но игровым днём турнира день не делает
 	mult, games int
 	winner      int // сторона-победитель; -1 - ничья
 	sides       [2]patchSide
@@ -137,16 +138,21 @@ func computeSeasonPatches(in patchInput) []patchAward {
 		out = append(out, patchAward{user: user, code: code, tier: tier, match: match, at: at, detail: detail})
 	}
 
-	firstDay, lastDay := "", ""
+	// Первый и последний игровой день - дни обычных матчей: шоу-матч идёт отдельно от турнира.
+	firstDay, finalDay, lastDay := "", "", ""
 	var lastAt time.Time
 	for _, m := range in.matches {
 		if m.live {
 			continue
 		}
+		lastDay, lastAt = patchDay(m.at), m.at
+		if m.show {
+			continue
+		}
 		if firstDay == "" {
 			firstDay = patchDay(m.at)
 		}
-		lastDay, lastAt = patchDay(m.at), m.at
+		finalDay = patchDay(m.at)
 	}
 
 	if in.belt.start != "" {
@@ -237,7 +243,7 @@ func computeSeasonPatches(in patchInput) []patchAward {
 				award(sd.user, "veteran", 1, m.id, m.at, nil)
 			}
 			p.played++
-			if day == firstDay {
+			if day == firstDay && !m.show {
 				award(sd.user, "first", 1, m.id, m.at, nil)
 			}
 			before := p.games
@@ -378,7 +384,7 @@ func computeSeasonPatches(in patchInput) []patchAward {
 		}
 		if final {
 			for _, m := range in.matches {
-				if !m.live && m.winner >= 0 && patchDay(m.at) == lastDay {
+				if !m.live && !m.show && m.winner >= 0 && patchDay(m.at) == finalDay {
 					if w := m.sides[m.winner]; w.user != "" {
 						award(w.user, "final", 1, m.id, m.at, nil)
 					}
@@ -432,7 +438,7 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 	const scope = `t.season_id = $1 AND t.mode = '1x1' AND t.status IN ('finished', 'live')`
 
 	rows, err := s.Pool.Query(ctx, `
-		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.status, t.rating_multiplier, t.games,
+		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.status, t.format = 'show', t.rating_multiplier, t.games,
 		       COALESCE(t.winner_participant_id, ''), t.maps
 		FROM tournaments t WHERE `+scope+`
 		ORDER BY 2, t.created_at, t.id`, sn.ID)
@@ -447,7 +453,7 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 		m := &patchMatch{winner: -1, roundMaps: map[int]string{}}
 		var status, winner string
 		var maps []byte
-		if err := rows.Scan(&m.id, &m.at, &status, &m.mult, &m.games, &winner, &maps); err != nil {
+		if err := rows.Scan(&m.id, &m.at, &status, &m.show, &m.mult, &m.games, &winner, &maps); err != nil {
 			rows.Close()
 			return in, err
 		}

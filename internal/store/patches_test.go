@@ -183,3 +183,34 @@ func TestPatchBeltAndSeasonEnd(t *testing.T) {
 		t.Fatalf("в последний день makar не играл")
 	}
 }
+
+func TestPatchShowMatchIsNotGameDay(t *testing.T) {
+	c := newPatchCase("finished")
+	show := func(m *patchMatch) { m.show = true }
+	c.match(1, sideSpec{user: "edbaka"}, sideSpec{user: "magamed"}, show)
+	c.nextDay()
+	c.match(0, sideSpec{user: "makar"}, sideSpec{user: "eden"})
+	c.match(0, sideSpec{user: "x"}, sideSpec{user: "edbaka"}, show)
+	c.nextDay()
+	c.match(0, sideSpec{user: "eden"}, sideSpec{user: "makar"})
+	c.nextDay()
+	c.match(0, sideSpec{user: "magamed"}, sideSpec{user: "edbaka"}, show)
+	all := computeSeasonPatches(c.in)
+
+	for _, u := range []string{"makar", "eden"} {
+		if a, ok := awardsOf(all, u)["first1"]; !ok || a.match != "mb" {
+			t.Fatalf("%s: первый игровой день - день первого обычного матча: %+v", u, a)
+		}
+	}
+	for _, u := range []string{"edbaka", "magamed", "x"} {
+		if _, ok := awardsOf(all, u)["first1"]; ok {
+			t.Fatalf("%s: шоу-матч «Первый рейд» не даёт", u)
+		}
+	}
+	if a, ok := awardsOf(all, "eden")["final1"]; !ok || a.match != "md" {
+		t.Fatalf("последний игровой день - день последнего обычного матча: %+v", a)
+	}
+	if _, ok := awardsOf(all, "magamed")["final1"]; ok {
+		t.Fatalf("победа в шоу-матче после последнего игрового дня - не «Последний аккорд»")
+	}
+}
