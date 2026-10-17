@@ -267,6 +267,37 @@ func (s *Server) handleSetMatchMaps(w http.ResponseWriter, r *http.Request) {
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
+// POST /api/tournaments/{id}/first {participantId} - кто первым ходит в пиках-банах: ведущий ставит
+// сторону по жребию на эфире.
+func (s *Server) handleFirstSide(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !s.matchGuard(w, r, id) {
+		return
+	}
+	var b struct {
+		ParticipantID string `json:"participantId"`
+	}
+	if err := readJSON(r, &b); err != nil || b.ParticipantID == "" {
+		writeError(w, http.StatusBadRequest, "укажите сторону")
+		return
+	}
+	switch err := s.Store.SetFirstSide(r.Context(), id, b.ParticipantID); {
+	case errors.Is(err, store.ErrMatchStarted):
+		writeError(w, http.StatusConflict, "раунд уже начался — очерёдность не меняется")
+		return
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
+		return
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, "в матче не две стороны")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
 func writeVetoError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrMatchStarted):

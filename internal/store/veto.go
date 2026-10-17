@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/jackc/pgx/v5"
@@ -277,6 +278,61 @@ func (s *Store) SetMatchMaps(ctx context.Context, tournamentID string, codes []s
 		if err := setRoundMap(ctx, tx, tournamentID, i+1, c); err != nil {
 			return err
 		}
+	}
+	return tx.Commit(ctx)
+}
+
+// SetFirstSide делает сторону participantID стороной A - она первой ходит в пиках-банах. Ходы записаны
+// за сторонами A и B, поэтому сделанные переходят вместе со стороной: так исправляют перепутанный жребий.
+func (s *Store) SetFirstSide(ctx context.Context, tournamentID, participantID string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if started, err := roundsStarted(ctx, tx, tournamentID); err != nil {
+		return err
+	} else if started {
+		return ErrMatchStarted
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, name FROM participants WHERE tournament_id = $1 ORDER BY seed, id FOR UPDATE`, tournamentID)
+	if err != nil {
+		return err
+	}
+	var ids, names []string
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			rows.Close()
+			return err
+		}
+		ids, names = append(ids, id), append(names, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	i := slices.Index(ids, participantID)
+	switch {
+	case i < 0:
+		return ErrNotFound
+	case len(ids) != 2:
+		return ErrConflict
+	case i == 0:
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE participants SET seed = CASE WHEN id = $2 THEN 1 ELSE 2 END WHERE tournament_id = $1`,
+		tournamentID, participantID); err != nil {
+		return err
+	}
+	// Название матча собрано из ников в порядке сторон; написанное вручную не трогаем.
+	if _, err := tx.Exec(ctx, `
+		UPDATE tournaments SET title = CASE WHEN title = $2 THEN $3 ELSE title END, updated_at = now() WHERE id = $1`,
+		tournamentID, names[0]+" vs "+names[1], names[1]+" vs "+names[0]); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
