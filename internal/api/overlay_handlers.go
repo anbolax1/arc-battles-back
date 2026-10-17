@@ -46,10 +46,25 @@ func (s *Server) overlayStateBytes(ctx context.Context) []byte {
 	if err != nil {
 		return []byte("{}")
 	}
-	if b, err := json.Marshal(deriveOverlayState(t)); err == nil {
+	ls := deriveOverlayState(t)
+	ls.Layout = stored.Layout // выбранная сцена, а не раскладка по умолчанию
+	if b, err := json.Marshal(ls); err == nil {
 		return b
 	}
 	return []byte("{}")
+}
+
+// republishOverlay рассылает текущее состояние оверлея; матч нового пульта сервер пересобирает сам.
+func (s *Server) republishOverlay(ctx context.Context) {
+	if id, err := s.Store.CurrentMatchID(ctx); err == nil && id != "" {
+		if st, err := s.Store.GetMatchState(ctx, id); err == nil && isMatchFlow(st) {
+			s.publishMatchState(ctx, st)
+			return
+		}
+	}
+	if env, err := s.stateEnvelope(s.overlayStateBytes(ctx)); err == nil {
+		s.Hub.Broadcast(env)
+	}
 }
 
 // deriveOverlayState строит дефолтное табло оверлея из live-турнира (стороны по seed,
@@ -91,10 +106,9 @@ func (s *Server) handleGetOverlayState(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, s.overlayStateBytes(r.Context()))
 }
 
-// handleGetOverlayLayout — общая раскладка оверлея для редактора (источник правды — БД).
-// В отличие от /overlay/state отдаёт СЫРОЙ сохранённый layout из live_state и не зависит
-// от того, есть ли сейчас live-турнир, — чтобы организатор грузил один и тот же оверлей с
-// любого устройства. Нет сохранённой раскладки → "{}" (фронт подставит дефолт).
+// handleGetOverlayLayout — раскладка выбранной сцены (её показывает /overlay) с её id в activePresetId.
+// В отличие от /overlay/state не зависит от того, есть ли сейчас live-турнир, — редактор с любого
+// устройства открывает ту же сцену. Сцена не выбрана → "{}" (фронт подставит дефолт).
 func (s *Server) handleGetOverlayLayout(w http.ResponseWriter, r *http.Request) {
 	data, _ := s.Store.GetLiveState(r.Context())
 	var stored models.LiveState
@@ -114,6 +128,20 @@ func (s *Server) handlePutOverlayState(w http.ResponseWriter, r *http.Request) {
 	if ls.Tasks == nil {
 		ls.Tasks = []models.Task{}
 	}
+	// Раскладку задаёт выбранная сцена: копия, присланная пультом, устаревает после первой правки сцены.
+	data, _ := s.Store.GetLiveState(r.Context())
+	var stored models.LiveState
+	_ = json.Unmarshal(data, &stored)
+	active := ""
+	if stored.Layout != nil {
+		active = stored.Layout.ActivePresetID
+	}
+	lay, err := s.Store.SceneLayout(r.Context(), active)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ls.Layout = lay
 	norm, err := json.Marshal(ls)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -123,7 +151,7 @@ func (s *Server) handlePutOverlayState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Счёт матча нового пульта считает сервер: из присланного берём только раскладку.
+	// Матч нового пульта сервер пересобирает сам: счёт и задания из присланного не берутся.
 	if id, err := s.Store.CurrentMatchID(r.Context()); err == nil && id != "" {
 		if st, err := s.Store.GetMatchState(r.Context(), id); err == nil && isMatchFlow(st) {
 			s.publishMatchOverlay(r.Context(), id)

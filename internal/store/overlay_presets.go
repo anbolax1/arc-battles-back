@@ -73,7 +73,7 @@ func (s *Store) CreateOverlayPreset(ctx context.Context, name, slug string, layo
 }
 
 // UpdateOverlayPreset — пустой slug означает «адрес не менять»: перезапись
-// раскладки не должна ломать уже вставленную в OBS ссылку.
+// раскладки не должна ломать уже вставленную в OBS ссылку. nil layout - раскладку не менять.
 func (s *Store) UpdateOverlayPreset(ctx context.Context, id, name, slug string, layout []byte) (models.OverlayPreset, error) {
 	if slug != "" {
 		var err error
@@ -81,8 +81,12 @@ func (s *Store) UpdateOverlayPreset(ctx context.Context, id, name, slug string, 
 			return models.OverlayPreset{}, err
 		}
 	}
-	const q = `UPDATE overlay_presets SET name = $2, slug = COALESCE(NULLIF($3, ''), slug), layout = $4, updated_at = now() WHERE id = $1 RETURNING ` + presetCols
-	return scanPreset(s.Pool.QueryRow(ctx, q, id, name, slug, layout))
+	var lay any // NULL - оставить прежнюю раскладку
+	if layout != nil {
+		lay = layout
+	}
+	const q = `UPDATE overlay_presets SET name = $2, slug = COALESCE(NULLIF($3, ''), slug), layout = COALESCE($4::jsonb, layout), updated_at = now() WHERE id = $1 RETURNING ` + presetCols
+	return scanPreset(s.Pool.QueryRow(ctx, q, id, name, slug, lay))
 }
 
 func (s *Store) DeleteOverlayPreset(ctx context.Context, id string) error {

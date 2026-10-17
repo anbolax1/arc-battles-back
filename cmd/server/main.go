@@ -49,6 +49,9 @@ func main() {
 	if _, err := st.SyncPatches(ctx); err != nil {
 		log.Printf("нашивки: %v", err)
 	}
+	if err := st.EnsureOverlayScene(ctx); err != nil {
+		log.Printf("сцена оверлея: %v", err)
+	}
 
 	// Бутстрап организатора: гарантируем аккаунт с ролью superadmin ДО приёма запросов,
 	// чтобы организаторский логин нельзя было перехватить через открытую регистрацию.

@@ -176,7 +176,8 @@ func (s *Server) Router() http.Handler {
 			r.Put("/news/{id}/image", s.handleSetNewsImage)
 			r.Delete("/news/{id}/image", s.handleDeleteNewsImage)
 
-			// Общие пресеты раскладки оверлея (сохранить/переключать шаблоны).
+			// Сцены оверлея (в коде - пресеты): у каждой своя ссылка для OBS, выбранную показывает /overlay.
+			r.Put("/overlay/active", s.handleSetActiveOverlayScene)
 			r.Get("/overlay/presets", s.handleListOverlayPresets)
 			r.Post("/overlay/presets", s.handleCreateOverlayPreset)
 			r.Put("/overlay/presets/{id}", s.handleUpdateOverlayPreset)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -32,12 +33,41 @@ func slugFor(b presetBody) string {
 // notifyPresetsChanged — сообщить открытым оверлеям, что пресеты изменились:
 // бампим ревизию и рассылаем обычный конверт состояния (ревизия едет в нём).
 // Страницы вида /overlay/<slug> по смене ревизии перечитывают свою раскладку,
-// поэтому правки пресета видны в OBS без перезагрузки источника.
+// а /overlay получает свежую копию выбранной сцены.
 func (s *Server) notifyPresetsChanged(ctx context.Context) {
 	s.presetsRev.Add(1)
-	if env, err := s.stateEnvelope(s.overlayStateBytes(ctx)); err == nil {
-		s.Hub.Broadcast(env)
+	if err := s.Store.SelectOverlayScene(ctx, ""); err != nil {
+		log.Printf("копия выбранной сцены оверлея: %v", err)
 	}
+	s.republishOverlay(ctx)
+}
+
+type activeSceneBody struct {
+	PresetID string `json:"presetId"`
+}
+
+// handleSetActiveOverlayScene — выбрать сцену, которую показывает общая ссылка /overlay.
+func (s *Server) handleSetActiveOverlayScene(w http.ResponseWriter, r *http.Request) {
+	var b activeSceneBody
+	if err := readJSON(r, &b); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	lay, err := s.Store.SceneLayout(r.Context(), b.PresetID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if lay == nil {
+		writeError(w, http.StatusNotFound, "сцена не найдена")
+		return
+	}
+	if err := s.Store.SelectOverlayScene(r.Context(), lay.ActivePresetID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.republishOverlay(r.Context())
+	writeJSON(w, http.StatusOK, lay)
 }
 
 func (s *Server) handleListOverlayPresets(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +85,7 @@ func (s *Server) handleListOverlayPresets(w http.ResponseWriter, r *http.Request
 func (s *Server) handleGetOverlayPreset(w http.ResponseWriter, r *http.Request) {
 	p, err := s.Store.GetOverlayPresetByKey(r.Context(), chi.URLParam(r, "key"))
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "пресет не найден")
+		writeError(w, http.StatusNotFound, "сцена не найдена")
 		return
 	}
 	if err != nil {
@@ -72,7 +102,7 @@ func (s *Server) handleCreateOverlayPreset(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if strings.TrimSpace(b.Name) == "" {
-		writeError(w, http.StatusBadRequest, "укажите название пресета")
+		writeError(w, http.StatusBadRequest, "укажите название сцены")
 		return
 	}
 	if len(b.Layout) == 0 {
@@ -95,15 +125,21 @@ func (s *Server) handleUpdateOverlayPreset(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if strings.TrimSpace(b.Name) == "" {
-		writeError(w, http.StatusBadRequest, "укажите название пресета")
+		writeError(w, http.StatusBadRequest, "укажите название сцены")
 		return
-	}
-	if len(b.Layout) == 0 {
-		b.Layout = json.RawMessage("{}")
 	}
 	// При обновлении адрес берём только явный: пустой = оставить прежний, иначе
 	// перезапись раскладки меняла бы ссылку вслед за названием и ломала OBS.
-	p, err := s.Store.UpdateOverlayPreset(r.Context(), id, strings.TrimSpace(b.Name), store.Slugify(b.Slug), b.Layout)
+	// Без раскладки меняются только название и адрес: переименование не затирает свежие правки сцены.
+	var layout []byte
+	if len(b.Layout) > 0 && string(b.Layout) != "null" {
+		layout = b.Layout
+	}
+	p, err := s.Store.UpdateOverlayPreset(r.Context(), id, strings.TrimSpace(b.Name), store.Slugify(b.Slug), layout)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "сцена не найдена")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
