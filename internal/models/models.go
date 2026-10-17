@@ -800,6 +800,7 @@ type WidgetInstance struct {
 	HideTitle      bool            `json:"hideTitle,omitempty"`             // скрыть заголовок/подпись виджета
 	ShowRoundScore bool            `json:"showRoundScore,omitempty"`        // табло: очки за раунд в скобках у счёта
 	ShowOpponentCs bool            `json:"showOpponentContracts,omitempty"` // контракты: показывать и контракты противника
+	ShowTags       bool            `json:"showTags,omitempty"`              // задания: плашка «карта» у задания на карту раунда
 	ShowMmr        bool            `json:"showMmr,omitempty"`               // табло: MMR сторон
 	ShowPlace      bool            `json:"showPlace,omitempty"`             // табло: места сторон в таблице сезона
 	ShowBelt       bool            `json:"showBelt,omitempty"`              // табло: значок у носителя пояса лиги
