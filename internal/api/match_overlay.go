@@ -177,14 +177,14 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 			}
 			c := models.LiveComplication{
 				Who: nameOf[task.ParticipantID], Text: overlayTaskText(task), ValueType: models.ValueFixed,
-				Reward: task.Points, Done: done,
+				Reward: task.Points, Done: done, Tag: task.Tag,
 			}
 			ls.Complications = append(ls.Complications, c)
 			ls.Complication = &c
 			continue
 		}
 		b := models.LiveBonus{
-			Text: overlayTaskText(task), ValueType: models.ValueFixed, Who: nameOf[task.ParticipantID], Category: "task",
+			Text: overlayTaskText(task), ValueType: models.ValueFixed, Who: nameOf[task.ParticipantID], Category: "task", Tag: task.Tag,
 		}
 		if task.MapCode != "" {
 			b.Category = "map"

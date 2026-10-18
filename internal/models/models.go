@@ -628,9 +628,16 @@ type CatalogTask struct {
 	Title     string   `json:"title,omitempty"`
 	Name      string   `json:"name,omitempty"` // название задания, например «Голыми руками»
 	Category  string   `json:"category"`       // task | protocol
+	Tag       string   `json:"tag"`            // normal | timed
 	MapCodes  []string `json:"mapCodes"`       // карты задания; пусто - общее, на любую карту
 	Active    bool     `json:"active"`         // выключенные не раздаются, но остаются в истории
 }
+
+// Тег задания на экране.
+const (
+	TaskTagNormal = "normal" // «обычное»
+	TaskTagTimed  = "timed"  // «на время»
+)
 
 type CatalogComplication struct {
 	ID        string `json:"id"`
@@ -680,6 +687,7 @@ type LiveComplication struct {
 	Minutes   int    `json:"minutes,omitempty"` // минуты штрафа (= times); присутствует в JSON, чтобы переживать round-trip
 	Reward    int    `json:"reward,omitempty"`  // протокол 3 сезона: награда за выполнение (+1); 0 - старый протокол-штраф
 	Done      bool   `json:"done,omitempty"`    // протокол 3 сезона выполнен
+	Tag       string `json:"tag,omitempty"`     // тег задания-протокола
 }
 
 // LiveVeto - ход пиков-банов для оверлея.
@@ -713,6 +721,7 @@ type LiveBonus struct {
 	Who       string `json:"who,omitempty"`      // имя стороны-владельца контракта
 	Opponent  bool   `json:"opponent,omitempty"` // контракт противника фокусной стороны (для опции «показывать контракты противника»)
 	Category  string `json:"category,omitempty"` // task | map | protocol - вид задания 3 сезона
+	Tag       string `json:"tag,omitempty"`      // тег задания
 }
 
 // LiveState — состояние оверлея, которым управляет организатор и которое стримится в OBS.
@@ -852,6 +861,7 @@ type RoundBonusTask struct {
 	CompletedBy   *string `json:"completedBy,omitempty"` // кто выполнил: владелец - очки задания, противник - +1, nil - не выполнено
 	Name          string  `json:"name,omitempty"`
 	Category      string  `json:"category"`          // task | protocol
+	Tag           string  `json:"tag"`               // тег задания из каталога
 	MapCode       string  `json:"mapCode,omitempty"` // задание на карту раунда
 }
 

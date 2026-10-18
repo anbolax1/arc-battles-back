@@ -11,7 +11,7 @@ import (
 // Контракты (бывш. бонусные задания). Владелец контракта = participant_id (кому выдан).
 // completed_by — кто фактически выполнил: владелец → +2 балла, противник → +1 балл, NULL → не выполнен.
 const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, ct.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
-	ct.name, ct.category, ` + dealtTaskMap
+	ct.name, ct.category, ct.tag, ` + dealtTaskMap
 
 // dealtTaskMap - карта выданного задания: у задания на картах это карта раунда, у общего - пусто.
 const dealtTaskMap = `CASE WHEN cardinality(ct.map_codes) > 0 THEN COALESCE(r.map_code, '') ELSE '' END`
@@ -20,7 +20,7 @@ func scanRoundBonusTask(row pgx.Row) (models.RoundBonusTask, error) {
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.Name, &t.Category, &t.MapCode)
+		&t.Name, &t.Category, &t.Tag, &t.MapCode)
 	return t, err
 }
 
@@ -256,7 +256,7 @@ func (s *Store) GetBonusAssignment(ctx context.Context, id string) (models.Round
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.Name, &t.Category, &t.MapCode, &tournamentID)
+		&t.Name, &t.Category, &t.Tag, &t.MapCode, &tournamentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, "", ErrNotFound
 	}

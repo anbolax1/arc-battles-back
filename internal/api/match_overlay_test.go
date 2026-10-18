@@ -35,3 +35,25 @@ func TestMatchOverlayShowsProtocolOfRaidSide(t *testing.T) {
 		t.Fatalf("задания в оверлее: %+v", ls.BonusTasks)
 	}
 }
+
+func TestMatchOverlayKeepsTaskTags(t *testing.T) {
+	tid, a := "t1", "pa"
+	st := models.MatchState{
+		Tournament:   models.Tournament{ID: tid, Participants: []models.Participant{{ID: a, Name: "EDEN", Seed: 1}}},
+		Stage:        "round",
+		CurrentRound: 1,
+		Tasks: []models.RoundBonusTask{
+			{RoundNumber: 1, ParticipantID: a, Category: "protocol", Tag: "timed", Text: "протокол", Points: 1},
+			{RoundNumber: 1, ParticipantID: a, Category: "task", Tag: "timed", Text: "в первые 5 минут", Points: 2},
+			{RoundNumber: 1, ParticipantID: a, Category: "task", Tag: "normal", Text: "обычное", Points: 2},
+		},
+	}
+	ls := buildMatchLiveState(st, models.LiveState{TournamentID: &tid, CurrentParticipantID: &a})
+
+	if len(ls.Complications) != 1 || ls.Complications[0].Tag != "timed" {
+		t.Fatalf("тег протокола: %+v", ls.Complications)
+	}
+	if len(ls.BonusTasks) != 2 || ls.BonusTasks[0].Tag != "timed" || ls.BonusTasks[1].Tag != "normal" {
+		t.Fatalf("теги заданий: %+v", ls.BonusTasks)
+	}
+}

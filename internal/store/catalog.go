@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const taskCols = `id, text, points, value_type, kind, source, author, title, name, category, map_codes, active`
+const taskCols = `id, text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active`
 
 // taskMaps - карты задания из параметра $n без несуществующих и повторов, в порядке карт на сайте.
 func taskMaps(n int) string {
@@ -18,7 +18,7 @@ func taskMaps(n int) string {
 func scanTask(row pgx.Row) (models.CatalogTask, error) {
 	var t models.CatalogTask
 	err := row.Scan(&t.ID, &t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Source, &t.Author, &t.Title,
-		&t.Name, &t.Category, &t.MapCodes, &t.Active)
+		&t.Name, &t.Category, &t.Tag, &t.MapCodes, &t.Active)
 	return t, err
 }
 
@@ -45,22 +45,22 @@ func (s *Store) ListCatalogTasks(ctx context.Context) ([]models.CatalogTask, err
 
 func (s *Store) CreateCatalogTask(ctx context.Context, t models.CatalogTask) (models.CatalogTask, error) {
 	q := `
-		INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, category, map_codes, active, sort_order)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ` + taskMaps(10) + `, $11, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
+		INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active, sort_order)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ` + taskMaps(11) + `, $12, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
 		RETURNING ` + taskCols
 	return scanTask(s.Pool.QueryRow(ctx, q, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author, t.Title,
-		t.Name, t.Category, t.MapCodes, t.Active))
+		t.Name, t.Category, t.Tag, t.MapCodes, t.Active))
 }
 
 func (s *Store) UpdateCatalogTask(ctx context.Context, id string, t models.CatalogTask) (models.CatalogTask, error) {
 	q := `
 		UPDATE catalog_tasks
 		SET text = $2, points = $3, value_type = $4, kind = $5, source = $6, author = $7, title = $8,
-		    name = $9, category = $10, map_codes = ` + taskMaps(11) + `, active = $12
+		    name = $9, category = $10, tag = $11, map_codes = ` + taskMaps(12) + `, active = $13
 		WHERE id = $1
 		RETURNING ` + taskCols
 	return scanTask(s.Pool.QueryRow(ctx, q, id, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author, t.Title,
-		t.Name, t.Category, t.MapCodes, t.Active))
+		t.Name, t.Category, t.Tag, t.MapCodes, t.Active))
 }
 
 // DeleteCatalogTask удаляет задание. Если оно уже выдавалось в матчах, удалить нельзя (иначе

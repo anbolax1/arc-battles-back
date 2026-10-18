@@ -43,8 +43,20 @@ type taskBody struct {
 	Title     string   `json:"title"`
 	Name      string   `json:"name"`
 	Category  string   `json:"category"`
+	Tag       string   `json:"tag"`
 	MapCodes  []string `json:"mapCodes"`
 	Active    *bool    `json:"active"`
+}
+
+// taskTag - тег задания; без тега протокол на время (его выполняют до 15-й минуты), остальные обычные.
+func taskTag(tag, category string) string {
+	if tag == models.TaskTagNormal || tag == models.TaskTagTimed {
+		return tag
+	}
+	if category == "protocol" {
+		return models.TaskTagTimed
+	}
+	return models.TaskTagNormal
 }
 
 func (b taskBody) toModel() (models.CatalogTask, string, bool) {
@@ -78,6 +90,7 @@ func (b taskBody) toModel() (models.CatalogTask, string, bool) {
 		Title:     strings.TrimSpace(b.Title),
 		Name:      strings.Trim(strings.TrimSpace(b.Name), "«»"),
 		Category:  category,
+		Tag:       taskTag(b.Tag, category),
 		MapCodes:  b.MapCodes,
 		Active:    active,
 	}, vt, true
