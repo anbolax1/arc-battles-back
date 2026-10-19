@@ -21,7 +21,7 @@ import (
 var PatchCodes = []string{
 	"top1", "belt", "regicide",
 	"streak", "flawless", "david", "comeback", "double", "photo", "shutout", "revenge",
-	"hunter", "clear", "topknock", "pacifist", "king",
+	"executor", "hunter", "clear", "topknock", "pacifist", "king",
 	"first", "final", "marathon", "veteran",
 }
 
@@ -37,6 +37,23 @@ const (
 // patchHunterTiers - ступени «Охотника»: ноков за сезон.
 var patchHunterTiers = []int{10, 25, 50}
 
+// patchExecutorTiers - ступени «Исполнителя»: своих выполненных заданий за сезон.
+var patchExecutorTiers = []int{10, 25, 50}
+
+// patchTiers - нашивки со ступенями.
+var patchTiers = map[string][]int{"executor": patchExecutorTiers, "hunter": patchHunterTiers}
+
+// tiersReached - ступени, которые счётчик прошёл, вырастая с before до after.
+func tiersReached(tiers []int, before, after int) []int {
+	var out []int
+	for t, need := range tiers {
+		if before < need && after >= need {
+			out = append(out, t+1)
+		}
+	}
+	return out
+}
+
 // День матча - по Москве: по московскому времени идут эфиры и расписание.
 var patchZone = time.FixedZone("MSK", 3*60*60)
 
@@ -46,6 +63,7 @@ type patchSide struct {
 	rated           bool // у матча есть изменение MMR этой стороны
 	before, after   int
 	knocks          map[int]int // ноки по номерам раундов
+	tasks           int         // свои выполненные задания
 	round1          int
 	hasRound1       bool
 }
@@ -53,7 +71,7 @@ type patchSide struct {
 type patchMatch struct {
 	id          string
 	at          time.Time
-	live        bool // матч идёт: в зачёт только ноки
+	live        bool // матч идёт: в зачёт только ноки и задания
 	show        bool // шоу-матч: в таблицу идёт, но игровым днём турнира день не делает
 	mult, games int
 	winner      int // сторона-победитель; -1 - ничья
@@ -92,7 +110,7 @@ type patchAward struct {
 type patchPlayer struct {
 	wins, losses, games, played int
 	streak, bestStreak          int
-	knocks                      int
+	knocks, tasks               int
 	david, comeback, double     int
 	lostTo                      map[string]bool
 	mapWins                     map[string]int
@@ -199,12 +217,17 @@ func computeSeasonPatches(in patchInput) []patchAward {
 			continue
 		}
 		m := e.match
-		// Ноки считаются и в идущем матче: «Зачистка» и «Охотник» выдаются прямо в эфире.
+		// Ноки и задания считаются и в идущем матче: «Зачистка», «Охотник» и «Исполнитель» выдаются прямо в эфире.
 		for i, sd := range m.sides {
 			if sd.user == "" {
 				continue
 			}
 			p := get(sd.user)
+			before := p.tasks
+			p.tasks += sd.tasks
+			for _, t := range tiersReached(patchExecutorTiers, before, p.tasks) {
+				award(sd.user, "executor", t, m.id, m.at, nil)
+			}
 			rounds := make([]int, 0, len(sd.knocks))
 			for rn := range sd.knocks {
 				rounds = append(rounds, rn)
@@ -214,10 +237,8 @@ func computeSeasonPatches(in patchInput) []patchAward {
 				k := sd.knocks[rn]
 				before := p.knocks
 				p.knocks += k
-				for t, need := range patchHunterTiers {
-					if before < need && p.knocks >= need {
-						award(sd.user, "hunter", t+1, m.id, m.at, nil)
-					}
+				for _, t := range tiersReached(patchHunterTiers, before, p.knocks) {
+					award(sd.user, "hunter", t, m.id, m.at, nil)
 				}
 				if k > p.bestRoundKnocks {
 					p.bestRoundKnocks = k
@@ -393,7 +414,7 @@ func computeSeasonPatches(in patchInput) []patchAward {
 		}
 	}
 
-	// Подробности - по итогу сезона на сейчас: лучшая серия, число раз, все ноки.
+	// Подробности - по итогу сезона на сейчас: лучшая серия, число раз, все ноки и задания.
 	for i := range out {
 		a := &out[i]
 		p := players[a.user]
@@ -409,6 +430,8 @@ func computeSeasonPatches(in patchInput) []patchAward {
 			a.detail = map[string]any{"n": p.comeback}
 		case "double":
 			a.detail = map[string]any{"n": p.double}
+		case "executor":
+			a.detail = map[string]any{"tasks": p.tasks}
 		case "hunter":
 			a.detail = map[string]any{"knocks": p.knocks}
 		case "clear":
@@ -581,6 +604,33 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 		}
 		if sd := side[pid]; sd != nil {
 			sd.knocks[n] += k
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return in, err
+	}
+
+	// «Исполнитель» растёт только от своих заданий: задание соперника стороне не засчитывается.
+	rows, err = s.Pool.Query(ctx, `
+		SELECT rbt.participant_id, COUNT(*)::int
+		FROM round_bonus_tasks rbt
+		JOIN rounds r ON r.id = rbt.round_id
+		JOIN tournaments t ON t.id = r.tournament_id
+		WHERE `+scope+` AND rbt.completed_by = rbt.participant_id
+		GROUP BY rbt.participant_id`, sn.ID)
+	if err != nil {
+		return in, err
+	}
+	for rows.Next() {
+		var pid string
+		var n int
+		if err := rows.Scan(&pid, &n); err != nil {
+			rows.Close()
+			return in, err
+		}
+		if sd := side[pid]; sd != nil {
+			sd.tasks = n
 		}
 	}
 	rows.Close()
@@ -830,7 +880,7 @@ func (s *Store) seasonPlayers(ctx context.Context) (map[string]int, error) {
 	return out, rows.Err()
 }
 
-// PlayerPatches - нашивки игрока по сезонам; у «Охотника» - высшая ступень.
+// PlayerPatches - нашивки игрока по сезонам; у нашивок со ступенями - высшая ступень.
 func (s *Store) PlayerPatches(ctx context.Context, userID string) (map[string]models.PatchSeason, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT pp.season_id, sn.status = 'finished', pp.code, pp.tier, pp.tournament_id, pp.earned_at,
@@ -928,8 +978,8 @@ func (s *Store) PatchCatalogFor(ctx context.Context, sn models.Season) (models.P
 			return rank(hs[i].user) < rank(hs[j].user)
 		})
 		st := models.PatchStat{Code: code, Holders: len(hs), Top: []models.PatchHolder{}}
-		if code == "hunter" {
-			st.Tiers = make([]int, len(patchHunterTiers))
+		if tiers := patchTiers[code]; tiers != nil {
+			st.Tiers = make([]int, len(tiers))
 		}
 		for _, x := range hs {
 			st.Top = append(st.Top, x.h)

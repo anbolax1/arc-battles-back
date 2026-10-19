@@ -480,11 +480,12 @@ type PlayerProfile struct {
 	Patches   map[string]PatchSeason     `json:"patches1x1"`   // нашивки по сезонам; ключ - сезон
 }
 
-// SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам и ноки игрока.
+// SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам, ноки и задания игрока.
 type SeasonAnalytics struct {
 	Maps      []MapStat      `json:"maps"`
 	Opponents []OpponentStat `json:"opponents"`
 	Knocks    KnockStats     `json:"knocks"`
+	Tasks     int            `json:"tasks"` // свои выполненные задания: по ним растёт «Исполнитель»
 }
 
 // KnockStats - ноки игрока за сезон. Матч идёт в зачёт, только если ноки в нём записаны хотя бы

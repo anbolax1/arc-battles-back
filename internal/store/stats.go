@@ -231,6 +231,31 @@ func (s *Store) Player1x1KnocksBySeason(ctx context.Context, userID string) (map
 	return out, rows.Err()
 }
 
+// Player1x1TasksBySeason - свои выполненные задания игрока в матчах 1×1 по сезонам. Ключ - как у ноков.
+func (s *Store) Player1x1TasksBySeason(ctx context.Context, userID string) (map[string]int, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT COALESCE(t.season_id, ''), COUNT(*)::int
+		FROM round_bonus_tasks rbt
+		JOIN participants p ON p.id = rbt.participant_id
+		JOIN tournaments t ON t.id = p.tournament_id
+		WHERE p.user_id = $1 AND t.mode = '1x1' AND t.status = 'finished' AND rbt.completed_by = rbt.participant_id
+		GROUP BY 1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var season string
+		var n int
+		if err := rows.Scan(&season, &n); err != nil {
+			return nil, err
+		}
+		out[season] = n
+	}
+	return out, rows.Err()
+}
+
 // Player1x1Place - место игрока в таблице 1×1 текущего сезона, как на странице рейтинга: по MMR,
 // при равном - по победам; 0 - в этом сезоне ещё не играл.
 func (s *Store) Player1x1Place(ctx context.Context, userID string) (int, error) {
@@ -574,6 +599,10 @@ func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.Mm
 	if err != nil {
 		return models.MmrStats{}, nil, nil, err
 	}
+	tasks, err := s.Player1x1TasksBySeason(ctx, userID)
+	if err != nil {
+		return models.MmrStats{}, nil, nil, err
+	}
 	analytics := map[string]models.SeasonAnalytics{}
 	for season := range maps {
 		analytics[season] = seasonAnalytics(maps[season], opps[season], knocks[season])
@@ -581,9 +610,16 @@ func (s *Store) PlayerStatsBundle(ctx context.Context, userID string) (models.Mm
 	for season := range opps {
 		analytics[season] = seasonAnalytics(maps[season], opps[season], knocks[season])
 	}
-	// Ничья не меняет MMR и не попадает в карты и соперников, а ноки в ней есть.
+	// Ничья не меняет MMR и не попадает в карты и соперников, а ноки и задания в ней есть.
 	for season := range knocks {
 		analytics[season] = seasonAnalytics(maps[season], opps[season], knocks[season])
+	}
+	for season := range tasks {
+		analytics[season] = seasonAnalytics(maps[season], opps[season], knocks[season])
+	}
+	for season, a := range analytics {
+		a.Tasks = tasks[season]
+		analytics[season] = a
 	}
 	stats := computeMmrStats(timeline)
 	// Лента - за все сезоны, а текущий MMR - в текущем сезоне (в начале сезона у всех стартовый).

@@ -27,6 +27,7 @@ type sideSpec struct {
 	total         int
 	before, after int
 	knocks        map[int]int
+	tasks         int
 	round1        int
 }
 
@@ -43,7 +44,7 @@ func (c *patchCase) match(winner int, a, b sideSpec, opts ...func(*patchMatch)) 
 			k = map[int]int{}
 		}
 		m.sides[i] = patchSide{pid: m.id + sp.user, user: sp.user, name: sp.user, total: sp.total, rated: true,
-			before: sp.before, after: sp.after, knocks: k, round1: sp.round1, hasRound1: sp.round1 > 0}
+			before: sp.before, after: sp.after, knocks: k, tasks: sp.tasks, round1: sp.round1, hasRound1: sp.round1 > 0}
 	}
 	for _, o := range opts {
 		o(&m)
@@ -117,6 +118,29 @@ func TestPatchKnocks(t *testing.T) {
 	}
 	if _, ok := awardsOf(all, "od")["pacifist1"]; ok {
 		t.Fatalf("у победителя с ноками «Пацифиста» нет")
+	}
+}
+
+func TestPatchExecutorTiers(t *testing.T) {
+	c := newPatchCase("active")
+	c.match(0, sideSpec{user: "od", tasks: 6}, sideSpec{user: "cheb", tasks: 2})
+	c.match(1, sideSpec{user: "takens", tasks: 1}, sideSpec{user: "od", tasks: 5})
+	live := c.match(-1, sideSpec{user: "od", tasks: 14}, sideSpec{user: "orochi"})
+	live.live = true
+	all := computeSeasonPatches(c.in)
+
+	od := awardsOf(all, "od")
+	if a, ok := od["executor1"]; !ok || a.match != "mb" {
+		t.Fatalf("десятое задание во втором матче - «Исполнитель I»: %+v", a)
+	}
+	if a, ok := od["executor2"]; !ok || a.match != "mc" || a.detail["tasks"] != 25 {
+		t.Fatalf("25 заданий набраны в идущем матче - «Исполнитель II» сразу: %+v", a)
+	}
+	if _, ok := od["executor3"]; ok {
+		t.Fatalf("до третьей ступени нужно 50 заданий")
+	}
+	if _, ok := awardsOf(all, "cheb")["executor1"]; ok {
+		t.Fatalf("двух заданий для «Исполнителя» мало")
 	}
 }
 
