@@ -162,7 +162,8 @@ type MatchState struct {
 	Manual       []RoundScore          `json:"manual"` // вместе с очками за ноки
 	Knocks       []RoundKnocks         `json:"knocks"`
 	Log          []MatchLogEntry       `json:"log"`
-	Patches      []MatchPatch          `json:"patches"` // нашивки, полученные в этом матче
+	Patches      []MatchPatch          `json:"patches"`         // нашивки, полученные в этом матче
+	Focus        string                `json:"focus,omitempty"` // сторона в рейде: её задания и счёт показывает оверлей
 }
 
 // Matchup - противостояние сторон для страницы матча: рейтинг, что стоит на кону, личные встречи.

@@ -20,10 +20,7 @@ func (s *Server) publishMatchOverlay(ctx context.Context, tournamentID string) {
 }
 
 func (s *Server) publishMatchState(ctx context.Context, st models.MatchState) {
-	data, _ := s.Store.GetLiveState(ctx)
-	var stored models.LiveState
-	_ = json.Unmarshal(data, &stored)
-	ls := buildMatchLiveState(st, stored)
+	ls := buildMatchLiveState(st, s.storedLiveState(ctx))
 	s.addStandingRatings(ctx, st, &ls)
 	if belt, err := s.Store.MatchBelt(ctx, st); err == nil {
 		ls.Belt = belt
@@ -39,6 +36,34 @@ func (s *Server) publishMatchState(ctx context.Context, st models.MatchState) {
 	}
 	if env, err := s.stateEnvelope(norm); err == nil {
 		s.Hub.Broadcast(env)
+	}
+}
+
+// storedLiveState - состояние оверлея из базы; в нём же сторона в рейде, общая для всех устройств пульта.
+func (s *Server) storedLiveState(ctx context.Context) models.LiveState {
+	data, _ := s.Store.GetLiveState(ctx)
+	var stored models.LiveState
+	_ = json.Unmarshal(data, &stored)
+	return stored
+}
+
+// storeRaidSide запоминает сторону в рейде; оверлей и пульт возьмут её при следующей публикации матча.
+func (s *Server) storeRaidSide(ctx context.Context, tournamentID, participantID string) {
+	stored := s.storedLiveState(ctx)
+	stored.TournamentID = &tournamentID
+	stored.CurrentParticipantID = &participantID
+	if norm, err := json.Marshal(stored); err == nil {
+		_ = s.Store.SetLiveState(ctx, norm)
+	}
+}
+
+// withRaidSide дописывает в идущий раунд сторону в рейде: по ней пульт подписывает кнопку хода матча.
+func (s *Server) withRaidSide(ctx context.Context, st *models.MatchState) {
+	if st.Stage != "round" {
+		return
+	}
+	if p := raidSide(sidesBySeed(st.Tournament), st.Tournament.ID, s.storedLiveState(ctx)); p != nil {
+		st.Focus = p.ID
 	}
 }
 
@@ -86,10 +111,31 @@ func overlayTaskText(t models.RoundBonusTask) string {
 	return t.Text
 }
 
-func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.LiveState {
-	t := st.Tournament
+// sidesBySeed - стороны матча по порядку: A, потом B.
+func sidesBySeed(t models.Tournament) []models.Participant {
 	parts := append([]models.Participant(nil), t.Participants...)
 	sort.SliceStable(parts, func(i, j int) bool { return parts[i].Seed < parts[j].Seed })
+	return parts
+}
+
+// raidSide - сторона в рейде: выбранная в пульте, а пока не выбрана - сторона A.
+func raidSide(parts []models.Participant, tournamentID string, stored models.LiveState) *models.Participant {
+	if stored.TournamentID != nil && *stored.TournamentID == tournamentID && stored.CurrentParticipantID != nil {
+		for i := range parts {
+			if parts[i].ID == *stored.CurrentParticipantID {
+				return &parts[i]
+			}
+		}
+	}
+	if len(parts) > 0 {
+		return &parts[0]
+	}
+	return nil
+}
+
+func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.LiveState {
+	t := st.Tournament
+	parts := sidesBySeed(t)
 	sides := map[string]string{}
 	for i, p := range parts {
 		if i == 0 {
@@ -112,17 +158,7 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 		}
 	}
 
-	var focus *models.Participant
-	if stored.TournamentID != nil && *stored.TournamentID == t.ID && stored.CurrentParticipantID != nil {
-		for i := range parts {
-			if parts[i].ID == *stored.CurrentParticipantID {
-				focus = &parts[i]
-			}
-		}
-	}
-	if focus == nil && len(parts) > 0 {
-		focus = &parts[0]
-	}
+	focus := raidSide(parts, t.ID, stored)
 
 	ls := models.LiveState{
 		TournamentID:   &t.ID,

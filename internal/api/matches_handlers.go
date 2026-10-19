@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -47,6 +46,7 @@ func (s *Server) handleGetMatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "матч не найден")
 		return
 	}
+	s.withRaidSide(r.Context(), &st)
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -87,6 +87,7 @@ func (s *Server) writeMatch(w http.ResponseWriter, r *http.Request, tournamentID
 	if st.Stage != "scheduled" {
 		s.publishMatchState(r.Context(), st)
 	}
+	s.withRaidSide(r.Context(), &st)
 	writeJSON(w, status, st)
 }
 
@@ -328,6 +329,12 @@ func (s *Server) handleNextRound(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Рейды в раунде идут по очереди, первой - сторона A: оверлей переключается на неё.
+	if t, err := s.Store.GetTournament(r.Context(), id); err == nil {
+		if parts := sidesBySeed(t); len(parts) > 0 {
+			s.storeRaidSide(r.Context(), id, parts[0].ID)
+		}
+	}
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
@@ -526,14 +533,7 @@ func (s *Server) handleMatchFocus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
 		return
 	}
-	data, _ := s.Store.GetLiveState(r.Context())
-	var stored models.LiveState
-	_ = json.Unmarshal(data, &stored)
-	stored.TournamentID = &id
-	stored.CurrentParticipantID = &p.ID
-	if norm, err := json.Marshal(stored); err == nil {
-		_ = s.Store.SetLiveState(r.Context(), norm)
-	}
+	s.storeRaidSide(r.Context(), id, p.ID)
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 

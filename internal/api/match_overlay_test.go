@@ -57,3 +57,18 @@ func TestMatchOverlayKeepsTaskTags(t *testing.T) {
 		t.Fatalf("теги заданий: %+v", ls.BonusTasks)
 	}
 }
+
+func TestRaidSideStartsFromSideA(t *testing.T) {
+	tid, other, a, b := "t1", "t0", "pa", "pb"
+	parts := sidesBySeed(models.Tournament{Participants: []models.Participant{{ID: b, Seed: 2}, {ID: a, Seed: 1}}})
+
+	if p := raidSide(parts, tid, models.LiveState{}); p == nil || p.ID != a {
+		t.Fatalf("пока сторону не выбрали, в рейде сторона A: %+v", p)
+	}
+	if p := raidSide(parts, tid, models.LiveState{TournamentID: &tid, CurrentParticipantID: &b}); p == nil || p.ID != b {
+		t.Fatalf("выбранная в пульте сторона: %+v", p)
+	}
+	if p := raidSide(parts, tid, models.LiveState{TournamentID: &other, CurrentParticipantID: &b}); p == nil || p.ID != a {
+		t.Fatalf("выбор из прошлого матча не в счёт: %+v", p)
+	}
+}
