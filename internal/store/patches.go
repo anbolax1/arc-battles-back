@@ -32,6 +32,7 @@ const (
 	patchClearKnocks  = 8   // «Зачистка»: ноков за один рейд
 	patchKingWins     = 3   // «Король карты»: меньше побед на карте - не король
 	patchMarathon     = 20  // «Марафонец»: матчей за сезон
+	patchKnocksKept   = 4   // с этого сезона пульт пишет ноки в каждом матче: 0:0 по нокам значит, что их не было
 )
 
 // patchHunterTiers - ступени «Охотника»: ноков за сезон.
@@ -136,6 +137,7 @@ func sumKnocks(k map[int]int) int {
 // сезона выдаются по его концу, а пока сезон идёт - как предварительные.
 func computeSeasonPatches(in patchInput) []patchAward {
 	final := in.season.Status == "finished"
+	knocksKept := in.season.Number != nil && *in.season.Number >= patchKnocksKept
 	players := map[string]*patchPlayer{}
 	get := func(u string) *patchPlayer {
 		p := players[u]
@@ -311,7 +313,8 @@ func computeSeasonPatches(in patchInput) []patchAward {
 				if l.total == 0 {
 					award(w.user, "shutout", 1, m.id, m.at, map[string]any{"opp": l.name, "score": score})
 				}
-				if sumKnocks(l.knocks) > 0 && sumKnocks(w.knocks) == 0 {
+				// Раньше ноки записаны не во всех матчах: без ноков у соперника «0 у победителя» могло значить «не вели».
+				if sumKnocks(w.knocks) == 0 && (knocksKept || sumKnocks(l.knocks) > 0) {
 					award(w.user, "pacifist", 1, m.id, m.at, map[string]any{"opp": l.name, "score": score})
 				}
 			}

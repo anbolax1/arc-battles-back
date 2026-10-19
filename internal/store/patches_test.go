@@ -144,6 +144,21 @@ func TestPatchExecutorTiers(t *testing.T) {
 	}
 }
 
+func TestPatchPacifistWithoutKnocks(t *testing.T) {
+	for _, tc := range []struct {
+		number int
+		want   bool
+	}{{3, false}, {4, true}} {
+		c := newPatchCase("active")
+		n := tc.number
+		c.in.season.Number = &n
+		c.match(0, sideSpec{user: "odin", total: 2}, sideSpec{user: "wolf", total: 1})
+		if _, got := awardsOf(computeSeasonPatches(c.in), "odin")["pacifist1"]; got != tc.want {
+			t.Fatalf("сезон %d, победа при 0:0 по нокам: «Пацифист» %v, а ждали %v", tc.number, got, tc.want)
+		}
+	}
+}
+
 func TestPatchScoresAndLeader(t *testing.T) {
 	c := newPatchCase("active")
 	c.match(0, sideSpec{user: "eden", total: 9, before: 1000, after: 1100}, sideSpec{user: "mol", total: 0, before: 1000, after: 900})
