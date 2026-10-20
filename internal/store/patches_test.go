@@ -44,7 +44,7 @@ func (c *patchCase) match(winner int, a, b sideSpec, opts ...func(*patchMatch)) 
 			k = map[int]int{}
 		}
 		m.sides[i] = patchSide{pid: m.id + sp.user, user: sp.user, name: sp.user, total: sp.total, rated: true,
-			before: sp.before, after: sp.after, knocks: k, tasks: sp.tasks, round1: sp.round1, hasRound1: sp.round1 > 0}
+			before: sp.before, after: sp.after, knocks: k, tasks: sp.tasks, round1: sp.round1}
 	}
 	for _, o := range opts {
 		o(&m)
@@ -182,6 +182,20 @@ func TestPatchScoresAndLeader(t *testing.T) {
 	}
 	if _, ok := un["comeback1"]; !ok {
 		t.Fatalf("проиграл первый раунд и выиграл матч - «Камбэк»")
+	}
+}
+
+func TestPatchComebackFromZero(t *testing.T) {
+	c := newPatchCase("active")
+	c.match(0, sideSpec{user: "od", total: 16}, sideSpec{user: "noisia", total: 7, round1: 3})
+	c.match(0, sideSpec{user: "eden"}, sideSpec{user: "x"})
+	all := computeSeasonPatches(c.in)
+
+	if _, ok := awardsOf(all, "od")["comeback1"]; !ok {
+		t.Fatalf("0:3 в первом раунде и победа в матче - «Камбэк»")
+	}
+	if _, ok := awardsOf(all, "eden")["comeback1"]; ok {
+		t.Fatalf("матч из таблицы без раундов - камбэка нет")
 	}
 }
 

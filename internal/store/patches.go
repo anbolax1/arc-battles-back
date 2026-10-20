@@ -66,7 +66,6 @@ type patchSide struct {
 	knocks          map[int]int // ноки по номерам раундов
 	tasks           int         // свои выполненные задания
 	round1          int
-	hasRound1       bool
 }
 
 type patchMatch struct {
@@ -318,7 +317,8 @@ func computeSeasonPatches(in patchInput) []patchAward {
 					award(w.user, "pacifist", 1, m.id, m.at, map[string]any{"opp": l.name, "score": score})
 				}
 			}
-			if w.hasRound1 && l.hasRound1 && w.round1 < l.round1 {
+			// Ноль в первом раунде - тоже счёт: при 0:3 раунд проигран, а матч из таблицы (0:0) камбэком не станет.
+			if w.round1 < l.round1 {
 				pw.comeback++
 				award(w.user, "comeback", 1, m.id, m.at, nil)
 			}
@@ -679,18 +679,12 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 			return in, err
 		}
 		if sd := side[pid]; sd != nil {
-			sd.round1, sd.hasRound1 = pts, true
+			sd.round1 = pts
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return in, err
-	}
-	// Раунд без очков у обеих сторон - матч перенесён без раундов, по первому раунду не судится.
-	for _, m := range matches {
-		if m.sides[0].round1 == 0 && m.sides[1].round1 == 0 {
-			m.sides[0].hasRound1, m.sides[1].hasRound1 = false, false
-		}
 	}
 
 	// Карты для «Короля карты» - как в разборе по картам в профиле: сыгранные раунды, иначе список матча.
