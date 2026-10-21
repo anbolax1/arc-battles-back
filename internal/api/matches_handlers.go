@@ -77,14 +77,15 @@ func (s *Server) handleMatchup(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeMatch отвечает свежим состоянием матча и обновляет оверлей. Запланированный шоу-матч оверлей
-// не трогает: там остаётся текущий матч.
+// не трогает: там остаётся текущий матч. Завершённый - только если оверлей показывает его же: правка
+// старого матча не должна подменить собой эфир.
 func (s *Server) writeMatch(w http.ResponseWriter, r *http.Request, tournamentID string, status int) {
 	st, err := s.Store.GetMatchState(r.Context(), tournamentID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "матч не найден")
 		return
 	}
-	if st.Stage != "scheduled" {
+	if st.Stage != "scheduled" && (st.Stage != "finished" || s.overlayShows(r.Context(), tournamentID)) {
 		s.publishMatchState(r.Context(), st)
 	}
 	s.withRaidSide(r.Context(), &st)
@@ -108,6 +109,30 @@ func (s *Server) matchGuard(w http.ResponseWriter, r *http.Request, tournamentID
 		return false
 	}
 	return !s.blockIfFinished(w, st)
+}
+
+// matchFinished - завершён ли матч: счёт завершённого можно исправить, но тогда итог подводится заново.
+func (s *Server) matchFinished(w http.ResponseWriter, r *http.Request, tournamentID string) (finished, ok bool) {
+	st, err := s.Store.TournamentStatus(r.Context(), tournamentID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "матч не найден")
+		return false, false
+	}
+	return st == "finished", true
+}
+
+// rescore заново подводит итог завершённого матча после правки счёта: победитель, MMR и нашивки.
+func (s *Server) rescore(w http.ResponseWriter, r *http.Request, tournamentID string) bool {
+	recomputed, err := s.Store.RescoreFinishedMatch(r.Context(), tournamentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	// Пересчёт MMR сам пересчитывает и нашивки.
+	if !recomputed {
+		s.syncPatches(r.Context())
+	}
+	return true
 }
 
 // GET /api/match-players - игроки для выбора сторон (MMR и счёт текущего сезона).
@@ -549,7 +574,8 @@ func (s *Server) handleMarkTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !s.matchGuard(w, r, tid) {
+	finished, ok := s.matchFinished(w, r, tid)
+	if !ok {
 		return
 	}
 	var b struct {
@@ -589,6 +615,9 @@ func (s *Server) handleMarkTask(w http.ResponseWriter, r *http.Request) {
 	_ = s.Store.AddMatchLog(r.Context(), tid, task.RoundNumber, who, "task", text, delta, map[string]any{
 		"type": "task", "assignmentId": asgID, "prev": res.Prev, "target": res.Target,
 	})
+	if finished && !s.rescore(w, r, tid) {
+		return
+	}
 	s.writeMatch(w, r, tid, http.StatusOK)
 }
 
@@ -645,37 +674,60 @@ func (s *Server) participantNames(r *http.Request, tournamentID string) map[stri
 	return out
 }
 
-// liveSide - идущий раунд и имена сторон матча; если раунд не идёт или сторона чужая, отвечает ошибкой.
-func (s *Server) liveSide(w http.ResponseWriter, r *http.Request, tournamentID, participantID string) (models.Round, map[string]string, bool) {
-	rd, ok := s.liveRound(r, tournamentID)
-	if !ok {
-		writeError(w, http.StatusConflict, "раунд не идёт")
-		return rd, nil, false
+// scoreRound - раунд, в который идёт правка счёта: в идущем матче - текущий, в завершённом - сыгранный
+// раунд с номером number (исправление итога после эфира).
+func (s *Server) scoreRound(w http.ResponseWriter, r *http.Request, tournamentID string, number int) (rd models.Round, finished, ok bool) {
+	if finished, ok = s.matchFinished(w, r, tournamentID); !ok {
+		return rd, false, false
 	}
-	names := s.participantNames(r, tournamentID)
-	if _, ok := names[participantID]; !ok {
-		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
-		return rd, nil, false
+	if !finished {
+		if rd, ok = s.liveRound(r, tournamentID); !ok {
+			writeError(w, http.StatusConflict, "раунд не идёт")
+		}
+		return rd, false, ok
 	}
-	return rd, names, true
+	rounds, err := s.Store.ListRounds(r.Context(), tournamentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return rd, true, false
+	}
+	for _, x := range rounds {
+		if x.Number == number && x.Status == "finished" {
+			return x, true, true
+		}
+	}
+	writeError(w, http.StatusConflict, "этот раунд не сыгран")
+	return rd, true, false
 }
 
-// POST /api/tournaments/{id}/points {participantId, delta, label} - ручные очки за идущий раунд.
+// scoreSide - раунд правки и имена сторон матча; если раунда нет или сторона чужая, отвечает ошибкой.
+func (s *Server) scoreSide(w http.ResponseWriter, r *http.Request, tournamentID, participantID string, number int) (rd models.Round, names map[string]string, finished, ok bool) {
+	if rd, finished, ok = s.scoreRound(w, r, tournamentID, number); !ok {
+		return rd, nil, finished, false
+	}
+	names = s.participantNames(r, tournamentID)
+	if _, ok := names[participantID]; !ok {
+		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
+		return rd, nil, finished, false
+	}
+	return rd, names, finished, true
+}
+
+// POST /api/tournaments/{id}/points {participantId, delta, label, round} - ручные очки за идущий раунд;
+// round - номер сыгранного раунда, когда исправляют завершённый матч.
 func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if !s.matchGuard(w, r, id) {
-		return
-	}
 	var b struct {
 		ParticipantID string `json:"participantId"`
 		Delta         int    `json:"delta"`
 		Label         string `json:"label"`
+		Round         int    `json:"round"`
 	}
 	if err := readJSON(r, &b); err != nil || b.ParticipantID == "" || b.Delta == 0 || b.Delta > 50 || b.Delta < -50 {
 		writeError(w, http.StatusBadRequest, "укажите сторону и очки")
 		return
 	}
-	rd, names, ok := s.liveSide(w, r, id, b.ParticipantID)
+	rd, names, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.Round)
 	if !ok {
 		return
 	}
@@ -694,26 +746,27 @@ func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "points", names[pid]+": "+label, applied, map[string]any{
 			"type": "points", "roundId": rd.ID, "participantId": pid, "applied": applied,
 		})
+		if finished && !s.rescore(w, r, id) {
+			return
+		}
 	}
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
-// POST /api/tournaments/{id}/knocks {participantId, delta: 1|-1} - нок стороне в идущем раунде или
-// снять ошибочный.
+// POST /api/tournaments/{id}/knocks {participantId, delta: 1|-1, round} - нок стороне в идущем раунде или
+// снять ошибочный; round - номер сыгранного раунда, когда исправляют завершённый матч.
 func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if !s.matchGuard(w, r, id) {
-		return
-	}
 	var b struct {
 		ParticipantID string `json:"participantId"`
 		Delta         int    `json:"delta"`
+		Round         int    `json:"round"`
 	}
 	if err := readJSON(r, &b); err != nil || b.ParticipantID == "" || (b.Delta != 1 && b.Delta != -1) {
 		writeError(w, http.StatusBadRequest, "укажите сторону и нок")
 		return
 	}
-	rd, names, ok := s.liveSide(w, r, id, b.ParticipantID)
+	rd, names, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.Round)
 	if !ok {
 		return
 	}
@@ -732,28 +785,31 @@ func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "knock", names[pid]+": "+text, applied*store.KnockPoints, map[string]any{
 			"type": "knock", "roundId": rd.ID, "participantId": pid, "applied": applied,
 		})
-		s.flashPatches(r.Context(), id, s.syncPatches(r.Context()))
+		// Плашки новых нашивок - только на эфире: исправление после матча их не показывает.
+		if !finished {
+			s.flashPatches(r.Context(), id, s.syncPatches(r.Context()))
+		} else if !s.rescore(w, r, id) {
+			return
+		}
 	}
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
-// POST /api/tournaments/{id}/legendary {legendaryId, participantId} - легендарка стороне в идущем раунде.
+// POST /api/tournaments/{id}/legendary {legendaryId, participantId, round} - легендарка стороне в идущем
+// раунде; round - номер сыгранного раунда, когда исправляют завершённый матч.
 func (s *Server) handleMatchLegendary(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if !s.matchGuard(w, r, id) {
-		return
-	}
 	var b struct {
 		LegendaryID   string `json:"legendaryId"`
 		ParticipantID string `json:"participantId"`
+		Round         int    `json:"round"`
 	}
 	if err := readJSON(r, &b); err != nil || b.LegendaryID == "" || b.ParticipantID == "" {
 		writeError(w, http.StatusBadRequest, "укажите легендарку и сторону")
 		return
 	}
-	rd, ok := s.liveRound(r, id)
+	rd, finished, ok := s.scoreRound(w, r, id, b.Round)
 	if !ok {
-		writeError(w, http.StatusConflict, "раунд не идёт")
 		return
 	}
 	leg, err := s.Store.GetLegendary(r.Context(), b.LegendaryID)
@@ -775,6 +831,9 @@ func (s *Server) handleMatchLegendary(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("%s: легендарка «%s»", names[pid], legendaryTitle(leg.Text)), leg.Points, map[string]any{
 			"type": "legendary", "legendaryId": b.LegendaryID,
 		})
+	if finished && !s.rescore(w, r, id) {
+		return
+	}
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
@@ -791,7 +850,8 @@ func legendaryTitle(text string) string {
 // POST /api/tournaments/{id}/undo - отменить последнее действие журнала.
 func (s *Server) handleMatchUndo(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if !s.matchGuard(w, r, id) {
+	finished, ok := s.matchFinished(w, r, id)
+	if !ok {
 		return
 	}
 	affected, err := s.Store.UndoLastMatchLog(r.Context(), id)
@@ -804,6 +864,10 @@ func (s *Server) handleMatchUndo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recomputeMany(r, affected)
-	s.syncPatches(r.Context())
+	if !finished {
+		s.syncPatches(r.Context())
+	} else if !s.rescore(w, r, id) {
+		return
+	}
 	s.writeMatch(w, r, id, http.StatusOK)
 }

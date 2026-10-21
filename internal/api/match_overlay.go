@@ -47,6 +47,11 @@ func (s *Server) storedLiveState(ctx context.Context) models.LiveState {
 	return stored
 }
 
+func (s *Server) overlayShows(ctx context.Context, tournamentID string) bool {
+	stored := s.storedLiveState(ctx)
+	return stored.TournamentID != nil && *stored.TournamentID == tournamentID
+}
+
 // storeRaidSide запоминает сторону в рейде; оверлей и пульт возьмут её при следующей публикации матча.
 func (s *Server) storeRaidSide(ctx context.Context, tournamentID, participantID string) {
 	stored := s.storedLiveState(ctx)

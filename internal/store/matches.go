@@ -449,28 +449,9 @@ func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
 // FinishMatch завершает матч: побеждает сторона с большим счётом, при равенстве - ничья без
 // изменения MMR. Досрочно - оставшиеся раунды не играются.
 func (s *Store) FinishMatch(ctx context.Context, tournamentID string) (models.Tournament, error) {
-	parts, err := s.ListParticipants(ctx, tournamentID)
+	winner, err := s.matchWinner(ctx, tournamentID)
 	if err != nil {
 		return models.Tournament{}, err
-	}
-	var winner *string
-	best, tie := -1, false
-	for _, p := range parts {
-		total, err := s.RecomputeParticipantPoints(ctx, p.ID)
-		if err != nil {
-			return models.Tournament{}, err
-		}
-		switch {
-		case total > best:
-			best, tie = total, false
-			id := p.ID
-			winner = &id
-		case total == best:
-			tie = true
-		}
-	}
-	if tie {
-		winner = nil
 	}
 	if _, err := s.Pool.Exec(ctx, `UPDATE rounds SET status = 'finished' WHERE tournament_id = $1 AND status = 'live'`, tournamentID); err != nil {
 		return models.Tournament{}, err
@@ -484,6 +465,60 @@ func (s *Store) FinishMatch(ctx context.Context, tournamentID string) (models.To
 		return models.Tournament{}, err
 	}
 	return s.GetTournament(ctx, tournamentID)
+}
+
+// matchWinner пересчитывает очки сторон и отдаёт победителя; при равном счёте победителя нет.
+func (s *Store) matchWinner(ctx context.Context, tournamentID string) (*string, error) {
+	parts, err := s.ListParticipants(ctx, tournamentID)
+	if err != nil {
+		return nil, err
+	}
+	var winner *string
+	best, tie := -1, false
+	for _, p := range parts {
+		total, err := s.RecomputeParticipantPoints(ctx, p.ID)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case total > best:
+			best, tie = total, false
+			id := p.ID
+			winner = &id
+		case total == best:
+			tie = true
+		}
+	}
+	if tie {
+		winner = nil
+	}
+	return winner, nil
+}
+
+// RescoreFinishedMatch заново подводит итог завершённого матча после правки счёта. Если сменился
+// победитель, MMR пересчитывается по всем матчам: от исхода зависит рейтинг перед каждым следующим.
+func (s *Store) RescoreFinishedMatch(ctx context.Context, tournamentID string) (mmrRecomputed bool, err error) {
+	winner, err := s.matchWinner(ctx, tournamentID)
+	if err != nil {
+		return false, err
+	}
+	var prev *string
+	if err := s.Pool.QueryRow(ctx, `SELECT winner_participant_id FROM tournaments WHERE id = $1`, tournamentID).Scan(&prev); err != nil {
+		return false, err
+	}
+	// Отметка времени нужна и без смены победителя: по ней обновляются итоги сезона и пояс.
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE tournaments SET winner_participant_id = $2, updated_at = now() WHERE id = $1`, tournamentID, winner); err != nil {
+		return false, err
+	}
+	if (prev == nil) == (winner == nil) && (prev == nil || *prev == *winner) {
+		return false, nil
+	}
+	// Изменения MMR, перенесённые извне, описывали прежний исход: с новым победителем считаем по Elo.
+	if _, err := s.Pool.Exec(ctx, `UPDATE participants SET mmr_delta = NULL WHERE tournament_id = $1`, tournamentID); err != nil {
+		return false, err
+	}
+	return true, s.RecomputeAllMmr(ctx)
 }
 
 // AdjustRoundPoints добавляет стороне ручные очки за раунд; поправка не съедает очки за ноки, поэтому
