@@ -30,10 +30,9 @@ type Server struct {
 	// dummyHash — фиктивный bcrypt-хеш для выравнивания времени ответа на вход
 	// несуществующего логина (защита от перебора пользователей по таймингу).
 	dummyHash string
-	// Троттлинг входа/регистрации (защита от перебора паролей и спама аккаунтов).
+	// Троттлинг входа (защита от перебора паролей).
 	loginIPLimiter   *limiter
 	loginUserLimiter *limiter
-	registerLimiter  *limiter
 }
 
 func New(cfg config.Config, st *store.Store, hub *ws.Hub) *Server {
@@ -47,7 +46,6 @@ func New(cfg config.Config, st *store.Store, hub *ws.Hub) *Server {
 		dummyHash:        dummy,
 		loginIPLimiter:   newLimiter(15, 5*time.Minute), // грубый предохранитель против долбёжки с одного IP
 		loginUserLimiter: newLimiter(8, 15*time.Minute), // против перебора пароля к конкретному логину
-		registerLimiter:  newLimiter(6, time.Hour),      // против массовой регистрации с одного IP
 	}
 }
 
@@ -64,7 +62,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/health", s.handleHealth)
 
 		// --- Auth (логин/пароль) ---
-		r.Post("/auth/register", s.handleSignup)
+		// Регистрации нет: аккаунты заводит организатор, вход игроку выдаёт ссылкой.
 		r.Post("/auth/login", s.handleLogin)
 		r.Post("/auth/logout", s.handleLogout)
 
