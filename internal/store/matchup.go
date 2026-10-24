@@ -67,9 +67,19 @@ func (s *Store) Matchup(ctx context.Context, tournamentID string) (models.Matchu
 	}
 
 	a, b := &out.Sides[0], &out.Sides[1]
+	chance, err := s.PrematchChance(ctx, t)
+	if err != nil {
+		return out, err
+	}
+	if chance != nil {
+		a.WinChance, out.DrawChance, b.WinChance = ChancePercents(*chance)
+	}
 	if a.Mmr > 0 && b.Mmr > 0 {
-		a.WinChance = int(math.Round(expectedScore(a.Mmr, b.Mmr) * 100))
-		b.WinChance = 100 - a.WinChance
+		if chance == nil {
+			// Рейдов команд 2×2 модель не знает: у них шанс по MMR.
+			a.WinChance = int(math.Round(expectedScore(a.Mmr, b.Mmr) * 100))
+			b.WinChance = 100 - a.WinChance
+		}
 		if t.Status != "finished" {
 			mult := max(t.RatingMultiplier, 1)
 			a.WinGain = eloWinMagnitude(a.Mmr, b.Mmr, mult, t.Games, rule.K)

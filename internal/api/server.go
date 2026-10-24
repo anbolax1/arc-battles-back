@@ -84,6 +84,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/matches/current", s.handleCurrentMatch)
 		r.Get("/tournaments/{id}/match", s.handleGetMatch)
 		r.Get("/tournaments/{id}/matchup", s.handleMatchup)
+		r.Get("/tournaments/{id}/chance", s.handleMatchChance)
 		r.Get("/overlay/state", s.handleGetOverlayState)
 		r.Get("/overlay/layout", s.handleGetOverlayLayout)
 		r.Get("/overlay/preset/{key}", s.handleGetOverlayPreset) // раскладка для ссылки /overlay/<slug> в OBS

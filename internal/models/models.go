@@ -162,8 +162,48 @@ type MatchState struct {
 	Manual       []RoundScore          `json:"manual"` // вместе с очками за ноки
 	Knocks       []RoundKnocks         `json:"knocks"`
 	Log          []MatchLogEntry       `json:"log"`
-	Patches      []MatchPatch          `json:"patches"`         // нашивки, полученные в этом матче
-	Focus        string                `json:"focus,omitempty"` // сторона в рейде: её задания и счёт показывает оверлей
+	Patches      []MatchPatch          `json:"patches"`          // нашивки, полученные в этом матче
+	Focus        string                `json:"focus,omitempty"`  // сторона в рейде: её задания и счёт показывает оверлей
+	Chance       *MatchChance          `json:"chance,omitempty"` // шансы на победу; у 2×2 не считаются
+}
+
+// Chance - шансы сторон A и B на победу, доли от 1, в сумме 1; Draw - шанс равного счёта после всех
+// рейдов: тогда матч решает дуэль до первого нока, её доля уже в шансах сторон.
+type Chance struct {
+	A    float64 `json:"a"`
+	Draw float64 `json:"draw"`
+	B    float64 `json:"b"`
+}
+
+// MatchChance - шансы матча перед первым рейдом и сейчас.
+type MatchChance struct {
+	Pre Chance `json:"pre"`
+	Now Chance `json:"now"`
+}
+
+// ChancePoint - шанс после действия в пульте или закрытия рейда: точка графика матча.
+type ChancePoint struct {
+	At     time.Time `json:"at"`
+	Kind   string    `json:"kind"` // start | knock | task | points | legendary | raid (рейд закрылся) | end | now
+	Round  int       `json:"round"`
+	Side   int       `json:"side"` // 0 - A, 1 - B, -1 - без стороны
+	Text   string    `json:"text"`
+	Delta  int       `json:"delta,omitempty"`
+	Score  [2]int    `json:"score"`
+	Chance Chance    `json:"chance"`
+}
+
+// ChanceTrail - как менялся шанс по ходу матча.
+type ChanceTrail struct {
+	Points []ChancePoint `json:"points"`
+	Live   bool          `json:"live"` // матч идёт: график ещё растёт
+}
+
+// ChanceDot - точка графика шанса в оверлее: шанс A и ничьей, раунд.
+type ChanceDot struct {
+	A     float64 `json:"a"`
+	Draw  float64 `json:"draw"`
+	Round int     `json:"round"`
 }
 
 // Matchup - противостояние сторон для страницы матча: рейтинг, что стоит на кону, личные встречи.
@@ -171,6 +211,7 @@ type Matchup struct {
 	Season     *SeasonRef    `json:"season,omitempty"`
 	Sides      []MatchupSide `json:"sides"` // по порядку: A, B
 	HeadToHead HeadToHead    `json:"headToHead"`
+	DrawChance int           `json:"drawChance,omitempty"` // шанс ничьей перед матчем, проценты
 }
 
 // SeasonRef - сезон, в зачёт которого идёт матч.
@@ -191,7 +232,7 @@ type MatchupSide struct {
 	Wins          int          `json:"wins"`
 	Losses        int          `json:"losses"`
 	IsNew         bool         `json:"isNew"`               // в сезоне ещё не играл
-	WinChance     int          `json:"winChance,omitempty"` // шанс победы по MMR, проценты
+	WinChance     int          `json:"winChance,omitempty"` // шанс на победу перед матчем, проценты
 	WinGain       int          `json:"winGain,omitempty"`   // MMR за победу
 	LossDrop      int          `json:"lossDrop,omitempty"`  // MMR за поражение
 }
@@ -766,6 +807,10 @@ type LiveState struct {
 
 	// Матч идёт за пояс лиги: табло отмечает носителя, а после матча - итог.
 	Belt *LiveBelt `json:"belt,omitempty"`
+
+	// Шансы на победу сторон (по порядку в standings) и ничьей, и как они менялись в этом матче.
+	Chance      *Chance     `json:"chance,omitempty"`
+	ChanceTrail []ChanceDot `json:"chanceTrail,omitempty"`
 }
 
 // OverlayLayout — документ раскладки оверлея: набор независимых виджетов с
@@ -819,6 +864,7 @@ type WidgetInstance struct {
 	ShowMmr        bool            `json:"showMmr,omitempty"`               // табло: MMR сторон
 	ShowPlace      bool            `json:"showPlace,omitempty"`             // табло: места сторон в таблице сезона
 	ShowBelt       bool            `json:"showBelt,omitempty"`              // табло: значок у носителя пояса лиги
+	ShowChance     bool            `json:"showChance,omitempty"`            // табло: шанс на победу сторон и ничьей
 	Anchor         string          `json:"anchor,omitempty"`                // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
 	Bg             OverlayBg       `json:"bg"`
 	Accent         string          `json:"accent,omitempty"`

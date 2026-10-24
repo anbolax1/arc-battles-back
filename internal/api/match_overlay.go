@@ -22,6 +22,7 @@ func (s *Server) publishMatchOverlay(ctx context.Context, tournamentID string) {
 func (s *Server) publishMatchState(ctx context.Context, st models.MatchState) {
 	ls := buildMatchLiveState(st, s.storedLiveState(ctx))
 	s.addStandingRatings(ctx, st, &ls)
+	s.addLiveChance(ctx, st, &ls)
 	if belt, err := s.Store.MatchBelt(ctx, st); err == nil {
 		ls.Belt = belt
 	} else {
@@ -36,6 +37,30 @@ func (s *Server) publishMatchState(ctx context.Context, st models.MatchState) {
 	}
 	if env, err := s.stateEnvelope(norm); err == nil {
 		s.Hub.Broadcast(env)
+	}
+}
+
+// addLiveChance - шансы сторон сейчас и как они менялись: для табло и графика шанса в оверлее.
+func (s *Server) addLiveChance(ctx context.Context, st models.MatchState, ls *models.LiveState) {
+	focus := ""
+	if ls.CurrentParticipantID != nil {
+		focus = *ls.CurrentParticipantID
+	}
+	mc, err := s.Store.MatchChance(ctx, st, focus)
+	if err != nil {
+		log.Printf("шанс для оверлея: %v", err)
+		return
+	}
+	if mc == nil {
+		return
+	}
+	ls.Chance = &mc.Now
+	trail, err := s.Store.MatchChanceTrail(ctx, st, focus)
+	if err != nil || trail == nil {
+		return
+	}
+	for _, p := range trail.Points {
+		ls.ChanceTrail = append(ls.ChanceTrail, models.ChanceDot{A: p.Chance.A, Draw: p.Chance.Draw, Round: p.Round})
 	}
 }
 
