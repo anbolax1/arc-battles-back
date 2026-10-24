@@ -315,6 +315,18 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 		return in, err
 	}
 
+	// Шанс на победу перед матчем - как его видела модель до этого матча.
+	snap, err := s.chances(ctx, false)
+	if err != nil {
+		return in, err
+	}
+	for i := range in.matches {
+		if h, ok := snap.matches[in.matches[i].id]; ok {
+			c := h.Pre
+			in.matches[i].chance = &c
+		}
+	}
+
 	rows, err = s.Pool.Query(ctx, `
 		SELECT id, title, starts_at, format, COALESCE(prize, '') FROM tournaments
 		WHERE season_id = $1 AND mode = '1x1' AND status IN ('upcoming', 'live')

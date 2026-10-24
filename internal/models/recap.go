@@ -81,6 +81,7 @@ type RecapMatch struct {
 	Delta  [2]int       `json:"delta"`
 	Score  *[2]int      `json:"score,omitempty"` // у матчей из таблицы организатора счёта нет
 	Rounds []RecapRound `json:"rounds"`
+	Chance *Chance      `json:"chance,omitempty"` // шанс на победу перед матчем
 }
 
 type RecapRound struct {
@@ -169,7 +170,7 @@ type RecapTaskDoer struct {
 	Offered int `json:"offered"`
 }
 
-// RecapUpset - победа вопреки рейтингу: Chance - шанс победителя по Эло перед матчем.
+// RecapUpset - неожиданная победа: Chance - шанс победителя на победу перед матчем.
 type RecapUpset struct {
 	Match  int     `json:"match"`
 	Chance float64 `json:"chance"`

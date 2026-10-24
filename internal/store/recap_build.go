@@ -19,7 +19,8 @@ const (
 	recapTopLen         = 5
 	recapKnockersLen    = 10
 	recapTaskDoersLen   = 8
-	recapRivalMeetings  = 3 // столько встреч, чтобы пара считалась соперничеством
+	recapRivalMeetings  = 3    // столько встреч, чтобы пара считалась соперничеством
+	recapEvenChance     = 0.01 // шансы ближе этого - фаворита нет
 )
 
 type recapInput struct {
@@ -45,6 +46,7 @@ type recapRaw struct {
 	total  [2]int
 	rounds []recapRawRound
 	veto   []recapRawVeto
+	chance *models.Chance // шанс на победу перед матчем
 }
 
 type recapRawRound struct {
@@ -273,7 +275,7 @@ func buildRecap(in recapInput) models.SeasonRecap {
 		}
 		mi := len(out.Matches)
 		rm := models.RecapMatch{ID: m.id, At: m.at, P: [2]int{idx[m.users[0]], idx[m.users[1]]}, Winner: m.winner,
-			Voided: m.voided, Mult: m.mult, Games: m.games, Show: m.show, Rounds: []models.RecapRound{}}
+			Voided: m.voided, Mult: m.mult, Games: m.games, Show: m.show, Rounds: []models.RecapRound{}, Chance: m.chance}
 		for s := 0; s < 2; s++ {
 			b, ok := before[m.id][m.users[s]]
 			if !ok {
@@ -416,18 +418,30 @@ func buildRecap(in recapInput) models.SeasonRecap {
 		out.Summary.First, out.Summary.Last = &first, &last
 	}
 
-	// Фаворит и неожиданные победы - по Эло от MMR сторон перед матчем.
+	// Фаворит и неожиданные победы - по шансу на победу перед матчем; без него - по Эло от MMR сторон.
 	var upsets []models.RecapUpset
 	for i, m := range out.Matches {
-		if m.Winner < 0 || m.Before[0] == m.Before[1] {
+		if m.Winner < 0 {
+			continue
+		}
+		w, l := m.Winner, 1-m.Winner
+		var pw, pl float64
+		if m.Chance != nil {
+			side := [2]float64{m.Chance.A, m.Chance.B}
+			pw, pl = side[w], side[l]
+		} else {
+			pw = expectedScore(m.Before[w], m.Before[l])
+			pl = 1 - pw
+		}
+		// Равные шансы: фаворита не было.
+		if math.Abs(pw-pl) < recapEvenChance {
 			continue
 		}
 		out.Favorites[1]++
-		w, l := m.Winner, 1-m.Winner
-		if m.Before[w] > m.Before[l] {
+		if pw > pl {
 			out.Favorites[0]++
 		}
-		upsets = append(upsets, models.RecapUpset{Match: i, Chance: expectedScore(m.Before[w], m.Before[l])})
+		upsets = append(upsets, models.RecapUpset{Match: i, Chance: pw})
 	}
 	sort.SliceStable(upsets, func(i, j int) bool { return upsets[i].Chance < upsets[j].Chance })
 	out.Upsets = append([]models.RecapUpset{}, upsets[:min(recapTopLen, len(upsets))]...)
