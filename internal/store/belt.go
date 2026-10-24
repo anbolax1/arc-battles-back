@@ -344,13 +344,13 @@ func (st beltState) model(names map[string]models.BeltPlayer) models.Belt {
 }
 
 // loadBeltInput - все завершённые матчи 1×1 со сторонами и MMR после матча, сверки рейтинга
-// и имена игроков для сайта.
+// и имена игроков для сайта. Незасчитанный матч для пояса - как ничья: пояс он не забирает и не защищает.
 func (s *Store) loadBeltInput(ctx context.Context) (beltInput, map[string]models.BeltPlayer, error) {
 	in := beltInput{}
 	names := map[string]models.BeltPlayer{}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.season_id, t.format = 'show', t.rating_multiplier, t.games,
-		       COALESCE(t.winner_participant_id, ''), p.id, COALESCE(p.user_id, ''), p.total_points,
+		       CASE WHEN t.voided THEN '' ELSE COALESCE(t.winner_participant_id, '') END, p.id, COALESCE(p.user_id, ''), p.total_points,
 		       COALESCE(u.login, ''), COALESCE(NULLIF(u.display_name, ''), u.login, p.name)
 		FROM tournaments t
 		JOIN participants p ON p.tournament_id = t.id AND p.kind = 'player'

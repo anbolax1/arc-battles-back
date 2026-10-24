@@ -240,6 +240,8 @@ type Tournament struct {
 	Prize               string           `json:"prize,omitempty"`      // приз шоу-матча
 	PreviewURL          string           `json:"previewUrl,omitempty"` // картинка анонса шоу-матча
 	WinnerParticipantID *string          `json:"winnerParticipantId,omitempty"`
+	Voided              bool             `json:"voided,omitempty"`     // матч не засчитан: MMR меняется только победителю
+	VoidReason          string           `json:"voidReason,omitempty"` // почему не засчитан - для страницы матча
 	CreatedAt           time.Time        `json:"createdAt"`
 	UpdatedAt           time.Time        `json:"updatedAt"`
 	ParticipantCount    int              `json:"participantCount"`    // в списках (без полного participants[])
@@ -365,6 +367,7 @@ type MmrPoint struct {
 	Games        int        `json:"games"`                // сколько матчей засчитывает (для побед и поражений)
 	Season       string     `json:"season"`               // id сезона; пусто - матч вне сезона
 	Correction   bool       `json:"correction,omitempty"` // не матч, а сверка рейтинга с официальными цифрами
+	Voided       bool       `json:"voided,omitempty"`     // матч не засчитан: сыгран, но в победы и серии не идёт
 }
 
 // MmrStats — сводная статистика по исходам (игрок 1×1 или команда 2×2). wins/losses/games
@@ -438,6 +441,7 @@ type PlayerHistoryItem struct {
 	Points       int        `json:"points"`
 	Win          bool       `json:"win"`
 	MmrDelta     *int       `json:"mmrDelta,omitempty"` // изменение MMR игрока (или его команды) за матч
+	Voided       bool       `json:"voided,omitempty"`   // матч не засчитан: ни победа, ни поражение
 }
 
 // PlayerStats — расширенная статистика игрока по завершённым турнирам:

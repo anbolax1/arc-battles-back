@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at, rating_multiplier, format, games, prize, preview_path`
+const tournamentCols = `id, title, mode, player_type, status, total_rounds, maps, starts_at, winner_participant_id, created_at, updated_at, rating_multiplier, format, games, prize, preview_path, voided, void_reason`
 
 // tournamentFields - куда читать колонки tournamentCols; finish доводит прочитанное до модели.
 func tournamentFields(t *models.Tournament) (dest []any, finish func()) {
@@ -19,7 +19,7 @@ func tournamentFields(t *models.Tournament) (dest []any, finish func()) {
 	var preview string
 	dest = []any{&t.ID, &t.Title, &t.Mode, &t.PlayerType, &t.Status, &t.TotalRounds, &mapsRaw,
 		&t.StartsAt, &t.WinnerParticipantID, &t.CreatedAt, &t.UpdatedAt, &t.RatingMultiplier, &t.Format, &t.Games,
-		&t.Prize, &preview}
+		&t.Prize, &preview, &t.Voided, &t.VoidReason}
 	finish = func() {
 		if len(mapsRaw) > 0 {
 			_ = json.Unmarshal(mapsRaw, &t.Maps)

@@ -166,7 +166,7 @@ func (s *Store) headToHead(ctx context.Context, t models.Tournament, a, b models
 		FROM tournaments t
 		JOIN participants pa ON pa.tournament_id = t.id AND `+fmt.Sprintf(cond, "pa", 2)+`
 		JOIN participants pb ON pb.tournament_id = t.id AND pb.id <> pa.id AND `+fmt.Sprintf(cond, "pb", 3)+`
-		WHERE t.id <> $1 AND t.mode = $4 AND t.status = 'finished'
+		WHERE t.id <> $1 AND t.mode = $4 AND t.status = 'finished' AND NOT t.voided
 		ORDER BY COALESCE(t.starts_at, t.created_at) DESC`, t.ID, argA, argB, t.Mode)
 	if err != nil {
 		return out, err

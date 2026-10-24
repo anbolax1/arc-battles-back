@@ -43,7 +43,8 @@ const noMapName = "Без карты"
 
 // computeMmrStats считает сводку по хронологической (ASC) ленте матчей: первый матч, пик MMR,
 // W/L (взвешенно по жетону ×2), винрейт, лучшие вин/луз-стрики и текущую серию, текущий MMR
-// (по последней точке). Место (Place) проставляет вызывающий.
+// (по последней точке). Место (Place) проставляет вызывающий. Незасчитанный матч - сыгранный, но
+// без исхода: в победы, поражения и серии не идёт.
 func computeMmrStats(points []models.MmrPoint) models.MmrStats {
 	st := models.MmrStats{CurrentMmr: StartMmr, PeakMmr: StartMmr}
 	if len(points) == 0 {
@@ -63,13 +64,17 @@ func computeMmrStats(points []models.MmrPoint) models.MmrStats {
 		if w < 1 {
 			w = 1
 		}
+		st.Games += w
+		if p.Mmr > peak {
+			peak = p.Mmr
+		}
+		if p.Voided {
+			continue
+		}
 		if p.Win {
 			st.Wins += w
 		} else {
 			st.Losses += w
-		}
-		if p.Mmr > peak {
-			peak = p.Mmr
 		}
 		kind := "loss"
 		if p.Win {
@@ -88,9 +93,8 @@ func computeMmrStats(points []models.MmrPoint) models.MmrStats {
 		}
 	}
 	st.PeakMmr = peak
-	st.Games = st.Wins + st.Losses
-	if st.Games > 0 {
-		st.Winrate = int(math.Round(float64(st.Wins) * 100 / float64(st.Games)))
+	if decided := st.Wins + st.Losses; decided > 0 {
+		st.Winrate = int(math.Round(float64(st.Wins) * 100 / float64(decided)))
 	}
 	st.CurrentStreakKind, st.CurrentStreakLen = curKind, curLen
 	st.CurrentMmr = points[len(points)-1].Mmr
@@ -104,6 +108,7 @@ func (s *Store) Player1x1Timeline(ctx context.Context, userID string) ([]models.
 	const q = `
 		SELECT COALESCE(h.tournament_id, ''), COALESCE(t.title, 'Сверка рейтинга'), h.created_at, h.delta, h.mmr_after,
 		       COALESCE(t.rating_multiplier, 1), COALESCE(t.games, 1), h.season_key, h.tournament_id IS NULL,
+		       COALESCE(t.voided, false),
 		       COALESCE(opp.name, '') AS opp_name,
 		       COALESCE(uu.login, '') AS opp_login,
 		       ` + matchMapsLabel + ` AS map
@@ -121,7 +126,7 @@ func (s *Store) Player1x1Timeline(ctx context.Context, userID string) ([]models.
 }
 
 // Player1x1MapsBySeason — разбивка матчей 1×1 по картам в каждом сезоне (взвешенно по ×2); матч на
-// нескольких картах засчитан на каждую. Ключ - сезон, пусто - матчи вне сезонов.
+// нескольких картах засчитан на каждую, незасчитанный - ни на одну. Ключ - сезон, пусто - матчи вне сезонов.
 func (s *Store) Player1x1MapsBySeason(ctx context.Context, userID string) (map[string][]models.MapStat, error) {
 	const q = `
 		SELECT COALESCE(h.season_key, '') AS season, ` + mapStatName + ` AS mp,
@@ -129,7 +134,7 @@ func (s *Store) Player1x1MapsBySeason(ctx context.Context, userID string) (map[s
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM mmr_history h
-		JOIN tournaments t ON t.id = h.tournament_id
+		JOIN tournaments t ON t.id = h.tournament_id AND NOT t.voided
 		` + matchMapsJoin + `
 		WHERE h.user_id = $1 AND h.mode = '1x1'
 		GROUP BY season, ` + mapStatKey + `
@@ -155,7 +160,7 @@ func (s *Store) Player1x1MapsBySeason(ctx context.Context, userID string) (map[s
 }
 
 // Player1x1OpponentsBySeason — head-to-head игрока в 1×1 в каждом сезоне (взвешенно по ×2), частые
-// соперники сверху. Ключ - сезон, пусто - матчи вне сезонов.
+// соперники сверху; незасчитанный матч в счёт встреч не идёт. Ключ - сезон, пусто - матчи вне сезонов.
 func (s *Store) Player1x1OpponentsBySeason(ctx context.Context, userID string) (map[string][]models.OpponentStat, error) {
 	const q = `
 		SELECT COALESCE(h.season_key, '') AS season,
@@ -164,7 +169,7 @@ func (s *Store) Player1x1OpponentsBySeason(ctx context.Context, userID string) (
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM mmr_history h
-		JOIN tournaments t ON t.id = h.tournament_id
+		JOIN tournaments t ON t.id = h.tournament_id AND NOT t.voided
 		LEFT JOIN LATERAL (
 		    SELECT p2.name, p2.user_id FROM participants p2
 		    WHERE p2.tournament_id = t.id AND (p2.user_id IS NULL OR p2.user_id <> $1)
@@ -279,8 +284,9 @@ func (s *Store) TeamsForUser(ctx context.Context, userID string) ([]models.TeamS
 		SELECT tm.team_key, tm.name, tm.mmr,
 		       ua.id, ua.login, ua.display_name, ua.avatar_url,
 		       ub.id, ub.login, ub.display_name, ub.avatar_url,
-		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0), 0)::int AS wins,
-		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses
+		       COALESCE(SUM(t.games) FILTER (WHERE h.delta > 0 AND NOT t.voided), 0)::int AS wins,
+		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0 AND NOT t.voided), 0)::int AS losses,
+		       COALESCE(SUM(t.games) FILTER (WHERE h.delta <> 0 OR t.voided), 0)::int AS games
 		FROM team_mmr tm
 		JOIN users ua ON ua.id = tm.member_a
 		JOIN users ub ON ub.id = tm.member_b
@@ -302,10 +308,9 @@ func (s *Store) TeamsForUser(ctx context.Context, userID string) ([]models.TeamS
 		if err := rows.Scan(&ts.TeamKey, &ts.Name, &ts.Mmr,
 			&a.UserID, &a.Login, &a.DisplayName, &a.AvatarURL,
 			&b.UserID, &b.Login, &b.DisplayName, &b.AvatarURL,
-			&ts.Wins, &ts.Losses); err != nil {
+			&ts.Wins, &ts.Losses, &ts.Games); err != nil {
 			return nil, err
 		}
-		ts.Games = ts.Wins + ts.Losses
 		ts.Members = []models.TeamMember{a, b}
 		out = append(out, ts)
 	}
@@ -361,7 +366,7 @@ func (s *Store) TeamPlace(ctx context.Context, teamKey string) (int, error) {
 // TeamTimeline — динамика MMR команды (ASC по времени): соперник (команда), карты, дельта, исход.
 func (s *Store) TeamTimeline(ctx context.Context, teamKey string) ([]models.MmrPoint, error) {
 	const q = `
-		SELECT h.tournament_id, t.title, h.created_at, h.delta, h.mmr_after, t.rating_multiplier, t.games, h.season_key,
+		SELECT h.tournament_id, t.title, h.created_at, h.delta, h.mmr_after, t.rating_multiplier, t.games, h.season_key, t.voided,
 		       COALESCE(opp.team_key, '') AS opp_key,
 		       COALESCE(ua.login, '') AS opp_a, COALESCE(ub.login, '') AS opp_b,
 		       ` + matchMapsLabel + ` AS map
@@ -385,7 +390,7 @@ func (s *Store) TeamTimeline(ctx context.Context, teamKey string) ([]models.MmrP
 	for rows.Next() {
 		var p models.MmrPoint
 		var oppA, oppB string
-		if err := rows.Scan(&p.TournamentID, &p.Title, &p.Date, &p.Delta, &p.Mmr, &p.Mult, &p.Games, &p.Season,
+		if err := rows.Scan(&p.TournamentID, &p.Title, &p.Date, &p.Delta, &p.Mmr, &p.Mult, &p.Games, &p.Season, &p.Voided,
 			&p.OpponentKey, &oppA, &oppB, &p.Map); err != nil {
 			return nil, err
 		}
@@ -405,7 +410,7 @@ func (s *Store) TeamMaps(ctx context.Context, teamKey string) ([]models.MapStat,
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM team_mmr_history h
-		JOIN tournaments t ON t.id = h.tournament_id
+		JOIN tournaments t ON t.id = h.tournament_id AND NOT t.voided
 		` + matchMapsJoin + `
 		WHERE h.team_key = $1
 		GROUP BY ` + mapStatKey + `
@@ -422,7 +427,7 @@ func (s *Store) TeamOpponents(ctx context.Context, teamKey string) ([]models.Opp
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM team_mmr_history h
-		JOIN tournaments t ON t.id = h.tournament_id
+		JOIN tournaments t ON t.id = h.tournament_id AND NOT t.voided
 		LEFT JOIN LATERAL (
 		    SELECT h2.team_key FROM team_mmr_history h2
 		    WHERE h2.tournament_id = t.id AND h2.team_key <> $1 LIMIT 1
@@ -460,7 +465,7 @@ func (s *Store) TeamMapsBySeason(ctx context.Context, teamKey string) (map[strin
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM team_mmr_history h
-		JOIN tournaments t ON t.id = h.tournament_id
+		JOIN tournaments t ON t.id = h.tournament_id AND NOT t.voided
 		` + matchMapsJoin + `
 		WHERE h.team_key = $1
 		GROUP BY season, ` + mapStatKey + `
@@ -495,7 +500,7 @@ func (s *Store) TeamOpponentsBySeason(ctx context.Context, teamKey string) (map[
 		       COALESCE(SUM(t.games) FILTER (WHERE h.delta < 0), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM team_mmr_history h
-		JOIN tournaments t ON t.id = h.tournament_id
+		JOIN tournaments t ON t.id = h.tournament_id AND NOT t.voided
 		LEFT JOIN LATERAL (
 		    SELECT h2.team_key FROM team_mmr_history h2
 		    WHERE h2.tournament_id = t.id AND h2.team_key <> $1 LIMIT 1
@@ -536,7 +541,7 @@ func (s *Store) scanTimeline(ctx context.Context, q, arg string) ([]models.MmrPo
 	for rows.Next() {
 		var p models.MmrPoint
 		if err := rows.Scan(&p.TournamentID, &p.Title, &p.Date, &p.Delta, &p.Mmr, &p.Mult, &p.Games, &p.Season,
-			&p.Correction, &p.Opponent, &p.OpponentKey, &p.Map); err != nil {
+			&p.Correction, &p.Voided, &p.Opponent, &p.OpponentKey, &p.Map); err != nil {
 			return nil, err
 		}
 		p.Win = p.Delta > 0

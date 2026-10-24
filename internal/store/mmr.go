@@ -218,7 +218,8 @@ func (s *Store) RefreshMmrCaches(ctx context.Context) error {
 // ровно две стороны). Идемпотентно: сначала откатывает прежние начисления этого турнира, затем
 // начисляет заново (выдерживает повторный finished и смену победителя). Без победителя или если
 // сторон не ровно две — MMR не двигается. 1×1 — рейтинг игроков (user_mmr); 2×2 — рейтинг КОМАНД
-// (team_mmr по паре userId). Как считается жетон ×2 - см. eloWinMagnitude.
+// (team_mmr по паре userId). Как считается жетон ×2 - см. eloWinMagnitude. В незасчитанном матче
+// победитель получает своё, а проигравшему MMR возвращается: матч у него в истории с изменением 0.
 func (s *Store) ApplyTournamentMmr(ctx context.Context, tournamentID string) error {
 	t, err := s.GetTournament(ctx, tournamentID)
 	if err != nil {
@@ -255,13 +256,13 @@ func (s *Store) ApplyTournamentMmr(ctx context.Context, tournamentID string) err
 		return err
 	}
 	if t.Mode == "2x2" {
-		return s.applyTeamMatch(ctx, tournamentID, winner, loser, mult, t.Games, rule)
+		return s.applyTeamMatch(ctx, tournamentID, winner, loser, mult, t.Games, rule, t.Voided)
 	}
-	return s.applyUserMatch(ctx, tournamentID, winner, loser, mult, t.Games, rule)
+	return s.applyUserMatch(ctx, tournamentID, winner, loser, mult, t.Games, rule, t.Voided)
 }
 
 // applyUserMatch — начисление 1×1 (рейтинг игроков).
-func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult, games int, rule seasonRule) error {
+func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult, games int, rule seasonRule, voided bool) error {
 	if winner.UserID == nil || loser.UserID == nil || *winner.UserID == "" || *loser.UserID == "" {
 		return nil
 	}
@@ -286,6 +287,9 @@ func (s *Store) applyUserMatch(ctx context.Context, tournamentID string, winner,
 	if pinW != nil && pinL != nil {
 		winDelta, loseDelta = *pinW, *pinL
 	}
+	if voided {
+		loseDelta = 0
+	}
 	if err := s.insertUserMmrHistory(ctx, tournamentID, wu, "1x1", winDelta, rw, rule.Key); err != nil {
 		return err
 	}
@@ -309,7 +313,7 @@ func (s *Store) insertUserMmrHistory(ctx context.Context, tournamentID, userID, 
 }
 
 // applyTeamMatch — начисление 2×2 (рейтинг КОМАНД). Неполные составы не рейтингуются.
-func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult, games int, rule seasonRule) error {
+func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner, loser models.Participant, mult, games int, rule seasonRule, voided bool) error {
 	wk, wa, wb, ok1 := teamKeyFromParticipant(winner)
 	lk, la, lb, ok2 := teamKeyFromParticipant(loser)
 	if !ok1 || !ok2 || wk == lk {
@@ -330,10 +334,14 @@ func (s *Store) applyTeamMatch(ctx context.Context, tournamentID string, winner,
 		return err
 	}
 	mag := eloWinMagnitude(rw, rl, mult, games, rule.K)
+	loseDelta := -mag
+	if voided {
+		loseDelta = 0
+	}
 	if err := s.insertTeamMmrHistory(ctx, tournamentID, wk, mag, rw, rule.Key); err != nil {
 		return err
 	}
-	if err := s.insertTeamMmrHistory(ctx, tournamentID, lk, -mag, rl, rule.Key); err != nil {
+	if err := s.insertTeamMmrHistory(ctx, tournamentID, lk, loseDelta, rl, rule.Key); err != nil {
 		return err
 	}
 	if err := s.recomputeTeamMmr(ctx, wk); err != nil {

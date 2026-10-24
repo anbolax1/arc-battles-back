@@ -73,6 +73,7 @@ type patchMatch struct {
 	at          time.Time
 	live        bool // матч идёт: в зачёт только ноки и задания
 	show        bool // шоу-матч: в таблицу идёт, но игровым днём турнира день не делает
+	void        bool // не засчитан: сыгран, но без исхода - нашивок за победу не даёт
 	mult, games int
 	winner      int // сторона-победитель; -1 - ничья
 	sides       [2]patchSide
@@ -275,6 +276,15 @@ func computeSeasonPatches(in patchInput) []patchAward {
 			}
 		}
 
+		// Исход незасчитанного матча не трогает серии и нашивки за победу, а рейтинг победителя - учитывается.
+		if m.void {
+			for _, sd := range m.sides {
+				if sd.user != "" && sd.rated {
+					mmr[sd.user] = sd.after
+				}
+			}
+			continue
+		}
 		if m.winner < 0 {
 			for _, sd := range m.sides {
 				if sd.user != "" {
@@ -408,7 +418,7 @@ func computeSeasonPatches(in patchInput) []patchAward {
 		}
 		if final {
 			for _, m := range in.matches {
-				if !m.live && !m.show && m.winner >= 0 && patchDay(m.at) == finalDay {
+				if !m.live && !m.show && !m.void && m.winner >= 0 && patchDay(m.at) == finalDay {
 					if w := m.sides[m.winner]; w.user != "" {
 						award(w.user, "final", 1, m.id, m.at, nil)
 					}
@@ -464,7 +474,7 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 	const scope = `t.season_id = $1 AND t.mode = '1x1' AND t.status IN ('finished', 'live')`
 
 	rows, err := s.Pool.Query(ctx, `
-		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.status, t.format = 'show', t.rating_multiplier, t.games,
+		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.status, t.format = 'show', t.voided, t.rating_multiplier, t.games,
 		       COALESCE(t.winner_participant_id, ''), t.maps
 		FROM tournaments t WHERE `+scope+`
 		ORDER BY 2, t.created_at, t.id`, sn.ID)
@@ -479,7 +489,7 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 		m := &patchMatch{winner: -1, roundMaps: map[int]string{}}
 		var status, winner string
 		var maps []byte
-		if err := rows.Scan(&m.id, &m.at, &status, &m.show, &m.mult, &m.games, &winner, &maps); err != nil {
+		if err := rows.Scan(&m.id, &m.at, &status, &m.show, &m.void, &m.mult, &m.games, &winner, &maps); err != nil {
 			rows.Close()
 			return in, err
 		}

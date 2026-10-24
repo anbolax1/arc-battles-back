@@ -267,3 +267,30 @@ func TestPatchShowMatchIsNotGameDay(t *testing.T) {
 		t.Fatalf("победа в шоу-матче после последнего игрового дня - не «Последний аккорд»")
 	}
 }
+
+func TestPatchVoidedMatch(t *testing.T) {
+	c := newPatchCase("active")
+	c.in.prevGames["dikey"] = 10
+	for i := 0; i < 4; i++ {
+		c.match(0, sideSpec{user: "ernon", before: 1000 + i*20, after: 1020 + i*20}, sideSpec{user: "x", before: 1000, after: 980})
+	}
+	void := func(m *patchMatch) { m.void = true }
+	c.match(0, sideSpec{user: "ernon", total: 16, before: 1080, after: 1134, knocks: map[int]int{1: 9}},
+		sideSpec{user: "dikey", before: 1000, after: 1000}, void)
+	c.match(0, sideSpec{user: "ernon", before: 1134, after: 1150}, sideSpec{user: "y", before: 1000, after: 984})
+	all := computeSeasonPatches(c.in)
+
+	ernon := awardsOf(all, "ernon")
+	if _, ok := ernon["shutout1"]; ok {
+		t.Fatalf("незасчитанный матч «Всухую» не даёт")
+	}
+	if a, ok := ernon["clear1"]; !ok || a.match != "me" {
+		t.Fatalf("ноки незасчитанного матча идут в «Зачистку»: %+v", a)
+	}
+	if a, ok := ernon["streak1"]; !ok || a.match != "mf" {
+		t.Fatalf("незасчитанный матч серию не рвёт и в неё не идёт - пятая победа в mf: %+v", a)
+	}
+	if a, ok := awardsOf(all, "dikey")["veteran1"]; !ok || a.match != "me" {
+		t.Fatalf("незасчитанный матч сыгран - «Ветеран» за него остаётся: %+v", a)
+	}
+}

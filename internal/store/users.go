@@ -117,7 +117,7 @@ func (s *Store) GetUserByLogin(ctx context.Context, login string) (models.User, 
 func (s *Store) PlayerHistory(ctx context.Context, userID string) ([]models.PlayerHistoryItem, error) {
 	const q = `
 		SELECT t.id, t.title, t.mode, t.status, t.starts_at, p.name, p.total_points,
-		       (t.winner_participant_id IS NOT NULL AND t.winner_participant_id = p.id) AS win,
+		       (t.winner_participant_id IS NOT NULL AND t.winner_participant_id = p.id) AS win, t.voided,
 		       COALESCE(
 		           (SELECT h.delta FROM mmr_history h WHERE h.tournament_id = t.id AND h.user_id = $1 AND h.mode = '1x1'),
 		           (SELECT th.delta FROM team_mmr_history th JOIN team_mmr tm ON tm.team_key = th.team_key
@@ -138,7 +138,7 @@ func (s *Store) PlayerHistory(ctx context.Context, userID string) ([]models.Play
 	out := []models.PlayerHistoryItem{}
 	for rows.Next() {
 		var h models.PlayerHistoryItem
-		if err := rows.Scan(&h.TournamentID, &h.Title, &h.Mode, &h.Status, &h.Date, &h.Name, &h.Points, &h.Win, &h.MmrDelta); err != nil {
+		if err := rows.Scan(&h.TournamentID, &h.Title, &h.Mode, &h.Status, &h.Date, &h.Name, &h.Points, &h.Win, &h.Voided, &h.MmrDelta); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -254,7 +254,7 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 		LEFT JOIN LATERAL (
 			SELECT
 				COUNT(*) FILTER (WHERE t.status = 'finished')                                   AS tournaments,
-				COUNT(*) FILTER (WHERE t.status = 'finished' AND t.winner_participant_id = p.id) AS wins,
+				COUNT(*) FILTER (WHERE t.status = 'finished' AND NOT t.voided AND t.winner_participant_id = p.id) AS wins,
 				COALESCE(SUM(p.total_points) FILTER (WHERE t.status = 'finished'), 0)            AS points,
 				COUNT(*)                                                                        AS participations
 			FROM participants p

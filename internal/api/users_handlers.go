@@ -118,7 +118,8 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Сводка и винрейт по режимам — из истории (только завершённые турниры).
+	// Сводка и винрейт по режимам — из истории (только завершённые турниры). Незасчитанный матч сыгран,
+	// но в победы и в винрейт не идёт.
 	var points, wins, tournaments int
 	for _, h := range history {
 		if h.Status != "finished" {
@@ -126,6 +127,9 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		}
 		points += h.Points
 		tournaments++
+		if h.Voided {
+			continue
+		}
 		if h.Win {
 			wins++
 		}
@@ -143,7 +147,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 	}
 	// Текущая серия — ведущий ран одинаковых исходов (история отсортирована по дате убыв.).
 	for _, h := range history {
-		if h.Status != "finished" {
+		if h.Status != "finished" || h.Voided {
 			continue
 		}
 		kind := "loss"

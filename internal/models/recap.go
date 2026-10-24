@@ -71,8 +71,9 @@ type RecapPlayer struct {
 type RecapMatch struct {
 	ID     string       `json:"id"`
 	At     time.Time    `json:"at"`
-	P      [2]int       `json:"p"`      // стороны A и B
-	Winner int          `json:"winner"` // 0 | 1, -1 - ничья
+	P      [2]int       `json:"p"`                // стороны A и B
+	Winner int          `json:"winner"`           // 0 | 1, -1 - ничья или незасчитанный матч
+	Voided bool         `json:"voided,omitempty"` // матч не засчитан: победителя для итогов нет
 	Mult   int          `json:"mult"`
 	Games  int          `json:"games"`
 	Show   bool         `json:"show"`

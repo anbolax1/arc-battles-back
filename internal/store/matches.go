@@ -576,8 +576,8 @@ func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, err
 	rows, err := s.Pool.Query(ctx, `
 		WITH h AS (
 			SELECT h.user_id, SUM(h.delta) AS total,
-			       SUM(CASE WHEN h.delta > 0 THEN t.games ELSE 0 END) AS wins,
-			       SUM(CASE WHEN h.delta < 0 THEN t.games ELSE 0 END) AS losses
+			       SUM(CASE WHEN h.delta > 0 AND NOT t.voided THEN t.games ELSE 0 END) AS wins,
+			       SUM(CASE WHEN h.delta < 0 AND NOT t.voided THEN t.games ELSE 0 END) AS losses
 			FROM mmr_history h LEFT JOIN tournaments t ON t.id = h.tournament_id
 			WHERE h.mode = '1x1' AND h.season_key = $1
 			GROUP BY h.user_id

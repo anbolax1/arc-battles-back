@@ -20,7 +20,7 @@ func (s *Store) seasonStart(ctx context.Context, seasonID string) int {
 // Leaderboard агрегирует рейтинг 1×1 по игрокам. В рейтинг идут ТОЛЬКО завершённые турниры
 // (status='finished'). MMR считается внутри сезона: в таблице сезона - MMR этого сезона, в таблице
 // «за всё время» - MMR текущего сезона. wins, losses и games учитывают жетон ×2 (матч = 2);
-// ничья - ни победа, ни поражение, но матч.
+// ничья и незасчитанный матч - ни победа, ни поражение, но матч.
 //
 //	seasonID="" — за всё время; иначе только турниры этого сезона.
 func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]models.LeaderboardRow, error) {
@@ -31,8 +31,8 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 		                  WHERE h.user_id = u.id AND h.mode = '1x1' AND h.season_key = $1), 0)
 		        END)::int AS mmr,
 		       COALESCE(SUM(p.total_points), 0)::int AS points,
-		       COALESCE(SUM(CASE WHEN t.winner_participant_id = p.id THEN t.games ELSE 0 END), 0)::int AS wins,
-		       COALESCE(SUM(CASE WHEN t.winner_participant_id <> p.id THEN t.games ELSE 0 END), 0)::int AS losses,
+		       COALESCE(SUM(CASE WHEN NOT t.voided AND t.winner_participant_id = p.id THEN t.games ELSE 0 END), 0)::int AS wins,
+		       COALESCE(SUM(CASE WHEN NOT t.voided AND t.winner_participant_id <> p.id THEN t.games ELSE 0 END), 0)::int AS losses,
 		       COALESCE(SUM(t.games), 0)::int AS games
 		FROM participants p
 		JOIN tournaments t ON t.id = p.tournament_id AND t.mode = '1x1' AND t.status = 'finished'
@@ -62,8 +62,8 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 
 // TeamLeaderboard агрегирует рейтинг 2×2 по КОМАНДАМ (пара игроков = команда с одним MMR, ключ -
 // пара userId). MMR - внутри сезона, как у игроков. wins/losses/games учитывают жетон ×2 (матч = 2)
-// и считаются по завершённым матчам (сезонный фильтр - по ним же). Показываются только команды,
-// сыгравшие хотя бы один завершённый матч (в сезоне, если задан).
+// и считаются по завершённым матчам (сезонный фильтр - по ним же); незасчитанный - матч, но ни победа,
+// ни поражение. Показываются только команды, сыгравшие хотя бы один завершённый матч (в сезоне, если задан).
 func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.TeamLeaderboardRow, error) {
 	const q = `
 		SELECT tm.team_key, tm.name,
@@ -71,8 +71,9 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 		             ELSE $2::int + COALESCE((SELECT SUM(h2.delta) FROM team_mmr_history h2
 		                  WHERE h2.team_key = tm.team_key AND h2.season_key = $1), 0)
 		        END)::int AS mmr,
-		       COALESCE(SUM(CASE WHEN h.delta > 0 THEN t.games ELSE 0 END), 0)::int AS wins,
-		       COALESCE(SUM(CASE WHEN h.delta < 0 THEN t.games ELSE 0 END), 0)::int AS losses,
+		       COALESCE(SUM(CASE WHEN h.delta > 0 AND NOT t.voided THEN t.games ELSE 0 END), 0)::int AS wins,
+		       COALESCE(SUM(CASE WHEN h.delta < 0 AND NOT t.voided THEN t.games ELSE 0 END), 0)::int AS losses,
+		       COALESCE(SUM(CASE WHEN h.delta <> 0 OR t.voided THEN t.games ELSE 0 END), 0)::int AS games,
 		       ua.id, ua.login, ua.display_name, ua.avatar_url,
 		       ub.id, ub.login, ub.display_name, ub.avatar_url
 		FROM team_mmr tm
@@ -95,12 +96,11 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 	for rows.Next() {
 		var r models.TeamLeaderboardRow
 		var a, b models.TeamMember
-		if err := rows.Scan(&r.TeamKey, &r.Name, &r.Mmr, &r.Wins, &r.Losses,
+		if err := rows.Scan(&r.TeamKey, &r.Name, &r.Mmr, &r.Wins, &r.Losses, &r.Games,
 			&a.UserID, &a.Login, &a.DisplayName, &a.AvatarURL,
 			&b.UserID, &b.Login, &b.DisplayName, &b.AvatarURL); err != nil {
 			return nil, err
 		}
-		r.Games = r.Wins + r.Losses
 		r.Members = []models.TeamMember{a, b}
 		out = append(out, r)
 	}

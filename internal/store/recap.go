@@ -78,10 +78,11 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 	}
 	const seasonMatches = `t.season_id = $1 AND t.status = 'finished' AND t.mode = '1x1'`
 
-	// Матчи и стороны: A - первый посев, B - второй.
+	// Матчи и стороны: A - первый посев, B - второй. У незасчитанного матча победителя для итогов нет.
 	rows, err := s.Pool.Query(ctx, `
-		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.format = 'show', t.rating_multiplier, t.games,
-		       COALESCE(t.winner_participant_id, ''), p.id, COALESCE(p.user_id, ''), p.total_points
+		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.format = 'show', t.voided, t.rating_multiplier, t.games,
+		       CASE WHEN t.voided THEN '' ELSE COALESCE(t.winner_participant_id, '') END,
+		       p.id, COALESCE(p.user_id, ''), p.total_points
 		FROM tournaments t JOIN participants p ON p.tournament_id = t.id
 		WHERE `+seasonMatches+`
 		ORDER BY COALESCE(t.starts_at, t.created_at), t.created_at, t.id, p.seed, p.id`, sn.ID)
@@ -94,9 +95,9 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 	for rows.Next() {
 		var id, winner, pid, user string
 		var at time.Time
-		var show bool
+		var show, voided bool
 		var mult, games, total int
-		if err := rows.Scan(&id, &at, &show, &mult, &games, &winner, &pid, &user, &total); err != nil {
+		if err := rows.Scan(&id, &at, &show, &voided, &mult, &games, &winner, &pid, &user, &total); err != nil {
 			rows.Close()
 			return in, err
 		}
@@ -104,7 +105,7 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 		if !ok {
 			mi = len(in.matches)
 			byID[id] = mi
-			in.matches = append(in.matches, recapRaw{id: id, at: at, show: show, mult: max(mult, 1), games: max(games, 1), winner: -1})
+			in.matches = append(in.matches, recapRaw{id: id, at: at, show: show, voided: voided, mult: max(mult, 1), games: max(games, 1), winner: -1})
 		}
 		m := &in.matches[mi]
 		s := sides[id]

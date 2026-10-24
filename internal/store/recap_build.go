@@ -37,9 +37,10 @@ type recapRaw struct {
 	id     string
 	at     time.Time
 	show   bool
+	voided bool
 	mult   int
 	games  int
-	winner int // -1 - ничья
+	winner int // -1 - ничья или незасчитанный матч
 	users  [2]string
 	total  [2]int
 	rounds []recapRawRound
@@ -272,7 +273,7 @@ func buildRecap(in recapInput) models.SeasonRecap {
 		}
 		mi := len(out.Matches)
 		rm := models.RecapMatch{ID: m.id, At: m.at, P: [2]int{idx[m.users[0]], idx[m.users[1]]}, Winner: m.winner,
-			Mult: m.mult, Games: m.games, Show: m.show, Rounds: []models.RecapRound{}}
+			Voided: m.voided, Mult: m.mult, Games: m.games, Show: m.show, Rounds: []models.RecapRound{}}
 		for s := 0; s < 2; s++ {
 			b, ok := before[m.id][m.users[s]]
 			if !ok {
