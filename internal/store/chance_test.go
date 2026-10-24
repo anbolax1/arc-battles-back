@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
 )
@@ -142,5 +143,28 @@ func TestLiveChanceDuel(t *testing.T) {
 	c := liveChance(st, parts, setup, "pb", nil)
 	if c.Draw != 1 || c.A >= 0.5 || math.Abs(c.A+c.B-1) > 1e-12 {
 		t.Fatalf("дуэль: %+v", c)
+	}
+}
+
+// Пульт сам начинает раунд рейдом A, ведущий сразу переключает на B: первым рейдил B, как и на графике.
+func TestFirstRaiderSkipsAutoStart(t *testing.T) {
+	t0 := time.Date(2026, 10, 24, 14, 0, 0, 0, time.UTC)
+	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
+	auto := []raidMark{
+		{at: at(0), side: 0, start: true}, {at: at(1), side: 1, start: true}, {at: at(5), side: 1},
+		{at: at(25), side: 0, start: true}, {at: at(30), side: 0}, {at: at(50), side: 1, start: true},
+	}
+	if first, ok := firstRaider(auto); !ok || first != 1 {
+		t.Fatalf("переключение на B через минуту рейд A не начинает: %v %v", first, ok)
+	}
+	// Рейд A без очков, но длиннее случайного переключения - настоящий пустой рейд.
+	empty := []raidMark{{at: at(0), side: 0, start: true}, {at: at(6), side: 1, start: true}, {at: at(9), side: 1}}
+	if first, ok := firstRaider(empty); !ok || first != 0 {
+		t.Fatalf("пустой рейд A первым: %v %v", first, ok)
+	}
+	// B ушёл в рейд без отметки, по действиям в журнале; его рейд закрыла отметка начала рейда A.
+	silent := []raidMark{{at: at(0), side: 0, start: true}, {at: at(1), side: 1}, {at: at(25), side: 0, start: true}}
+	if first, ok := firstRaider(silent); !ok || first != 1 {
+		t.Fatalf("рейд B по действиям: %v %v", first, ok)
 	}
 }

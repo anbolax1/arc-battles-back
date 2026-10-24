@@ -302,16 +302,17 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 	}
 
 	// Кто рейдил первым в раунде: по отметкам начала рейдов, а у старых матчей - по первому действию в журнале.
-	type firstKey struct {
-		match, number, side int
-	}
-	firsts := [2]map[firstKey]time.Time{{}, {}}
+	type markKey struct{ match, number int }
+	marks := map[markKey][]raidMark{}
+	withStarts := map[int]bool{}
 	for src, q := range []string{
-		`SELECT x.tournament_id, x.round_number, x.participant_id, min(x.started_at)
-		 FROM raid_starts x JOIN tournaments t ON t.id = x.tournament_id WHERE ` + scope + ` GROUP BY 1, 2, 3`,
-		`SELECT x.tournament_id, x.round_number, x.participant_id, min(x.created_at)
+		`SELECT x.tournament_id, x.round_number, x.participant_id, x.started_at
+		 FROM raid_starts x JOIN tournaments t ON t.id = x.tournament_id WHERE ` + scope + `
+		 ORDER BY x.started_at, x.id`,
+		`SELECT x.tournament_id, x.round_number, x.participant_id, x.created_at
 		 FROM match_log x JOIN tournaments t ON t.id = x.tournament_id
-		 WHERE ` + scope + ` AND x.participant_id IS NOT NULL GROUP BY 1, 2, 3`,
+		 WHERE ` + scope + ` AND x.participant_id IS NOT NULL
+		 ORDER BY x.created_at, x.id`,
 	} {
 		rows, err = s.Pool.Query(ctx, q)
 		if err != nil {
@@ -326,7 +327,11 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 				return nil, err
 			}
 			if sd, ok := sides[pid]; ok && sd.match == idx[tid] {
-				firsts[src][firstKey{sd.match, number, sd.side}] = at
+				k := markKey{sd.match, number}
+				marks[k] = append(marks[k], raidMark{at: at, side: sd.side, start: src == 0})
+				if src == 0 {
+					withStarts[sd.match] = true
+				}
 			}
 		}
 		rows.Close()
@@ -335,18 +340,81 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 		}
 	}
 	for ref, number := range numbers {
-		for _, f := range firsts {
-			ta, okA := f[firstKey{ref.match, number, 0}]
-			tb, okB := f[firstKey{ref.match, number, 1}]
-			if okA && okB {
-				if tb.Before(ta) {
-					recs[ref.match].Rounds[ref.round].First = 1
-				}
-				break
-			}
+		ms := marks[markKey{ref.match, number}]
+		sortRaidMarks(ms)
+		pick := firstActor
+		if withStarts[ref.match] {
+			pick = firstRaider
+		}
+		if first, ok := pick(ms); ok {
+			recs[ref.match].Rounds[ref.round].First = first
 		}
 	}
 	return recs, nil
+}
+
+// raidMark - отметка раунда: начало рейда стороны или её действие в журнале.
+type raidMark struct {
+	at    time.Time
+	side  int
+	start bool
+}
+
+// sortRaidMarks - по времени, как в повторе журнала: начало рейда в ту же секунду, что и действие, раньше него.
+func sortRaidMarks(ms []raidMark) {
+	sort.SliceStable(ms, func(i, j int) bool {
+		if !ms[i].at.Equal(ms[j].at) {
+			return ms[i].at.Before(ms[j].at)
+		}
+		return ms[i].start && !ms[j].start
+	})
+}
+
+// firstRaider - чей рейд в раунде первым закрыл соперник, начав свой, по правилам повтора журнала для графика.
+// Пульт сам отмечает начало рейда стороне A в начале раунда, поэтому первая отметка - ещё не первый рейд.
+func firstRaider(ms []raidMark) (int, bool) {
+	var state, events [2]int
+	var since [2]time.Time
+	first := -1 // кто первым ушёл в рейд; случайное переключение не в счёт
+	for _, x := range ms {
+		if x.start {
+			other := 1 - x.side
+			if state[other] == raidOn {
+				if x.at.Sub(since[other]) >= raidMisclick || events[other] > 0 {
+					return other, true
+				}
+				state[other] = raidAhead
+				if first == other {
+					first = -1
+				}
+			}
+			state[x.side], since[x.side] = raidOn, x.at
+		} else {
+			if state[x.side] == raidAhead {
+				state[x.side], since[x.side] = raidOn, x.at
+			}
+			events[x.side]++
+		}
+		if first < 0 && state[x.side] == raidOn {
+			first = x.side
+		}
+	}
+	return first, first >= 0
+}
+
+// firstActor - у матча без отметок начала рейдов первым считается B, только если оба действовали и B раньше.
+func firstActor(ms []raidMark) (int, bool) {
+	var seen [2]bool
+	for _, x := range ms {
+		if x.start || seen[x.side] {
+			continue
+		}
+		seen[x.side] = true
+		if seen[1-x.side] {
+			return 1 - x.side, true
+		}
+	}
+	return 0, false
 }
 
 // chanceSetupFor - стороны матча глазами модели: чего ждать от каждого раунда этого матча.
