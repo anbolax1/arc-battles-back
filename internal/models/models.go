@@ -867,6 +867,7 @@ type WidgetInstance struct {
 	ShowPlace      bool            `json:"showPlace,omitempty"`             // табло: места сторон в таблице сезона
 	ShowBelt       bool            `json:"showBelt,omitempty"`              // табло: значок у носителя пояса лиги
 	ShowChance     bool            `json:"showChance,omitempty"`            // табло: шанс на победу сторон и ничьей
+	ShowChanceBar  bool            `json:"showChanceBar,omitempty"`         // табло: полоса шанса под счётом
 	Anchor         string          `json:"anchor,omitempty"`                // привязка к краю (tl|tc|tr|ml|c|mr|bl|bc|br); "" — свободно
 	Bg             OverlayBg       `json:"bg"`
 	Accent         string          `json:"accent,omitempty"`
