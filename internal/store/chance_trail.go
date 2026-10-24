@@ -193,6 +193,13 @@ func (s *Store) MatchChanceTrail(ctx context.Context, st models.MatchState, focu
 			raids[e.round][e.side].since = e.at
 			continue
 		}
+		if e.kind == DuelLogKind {
+			for r := 1; r <= rounds; r++ {
+				raids[r][0].state, raids[r][1].state = raidDone, raidDone
+			}
+			add(e.at, e.kind, e.round, -1, "дуэль до первого нока", 0)
+			continue
+		}
 		if !withStarts && e.side >= 0 && (e.kind == "knock" || e.kind == "task") {
 			closeBefore(e.round, e.at)
 			// По порядку пульта первой рейдит A: если B начал, а у A в раунде ничего не было, рейд A закрыт.

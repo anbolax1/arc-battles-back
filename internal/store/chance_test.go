@@ -129,3 +129,18 @@ func TestChanceTiedGoesToDuel(t *testing.T) {
 		t.Fatalf("дуэль у того, кто чаще нокает: %v", s.Duel)
 	}
 }
+
+// Дуэль в пульте: рейды сыграны все, хоть сторона B ещё «в рейде», ничья наверняка, шанс - кто выиграет дуэль.
+func TestLiveChanceDuel(t *testing.T) {
+	parts := [2]models.Participant{{ID: "pa", Seed: 1}, {ID: "pb", Seed: 2}}
+	setup := matchSetup{RatingP: 0.5, Duel: 0.3, Rounds: []roundSetup{{Kit: kitFree}, {Kit: kitOwn}}}
+	st := models.MatchState{Stage: "round", CurrentRound: 2, Scores: []models.RoundScore{
+		{RoundNumber: 1, ParticipantID: "pa", Points: 4}, {RoundNumber: 1, ParticipantID: "pb", Points: 1},
+		{RoundNumber: 2, ParticipantID: "pa", Points: 3}, {RoundNumber: 2, ParticipantID: "pb", Points: 6},
+	}}
+	st.Log = []models.MatchLogEntry{{Kind: DuelLogKind}}
+	c := liveChance(st, parts, setup, "pb", nil)
+	if c.Draw != 1 || c.A >= 0.5 || math.Abs(c.A+c.B-1) > 1e-12 {
+		t.Fatalf("дуэль: %+v", c)
+	}
+}

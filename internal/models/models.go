@@ -184,7 +184,7 @@ type MatchChance struct {
 // ChancePoint - шанс после действия в пульте или закрытия рейда: точка графика матча.
 type ChancePoint struct {
 	At     time.Time `json:"at"`
-	Kind   string    `json:"kind"` // start | knock | task | points | legendary | raid (рейд закрылся) | end | now
+	Kind   string    `json:"kind"` // start | knock | task | points | legendary | raid (рейд закрылся) | duel | end | now
 	Round  int       `json:"round"`
 	Side   int       `json:"side"` // 0 - A, 1 - B, -1 - без стороны
 	Text   string    `json:"text"`
@@ -811,6 +811,8 @@ type LiveState struct {
 	// Шансы на победу сторон (по порядку в standings) и ничьей, и как они менялись в этом матче.
 	Chance      *Chance     `json:"chance,omitempty"`
 	ChanceTrail []ChanceDot `json:"chanceTrail,omitempty"`
+	// Счёт после всех рейдов равный: стороны играют дуэль до первого нока.
+	Duel bool `json:"duel,omitempty"`
 }
 
 // OverlayLayout — документ раскладки оверлея: набор независимых виджетов с

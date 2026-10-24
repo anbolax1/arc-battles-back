@@ -467,6 +467,19 @@ func (s *Store) RecordRaidStart(ctx context.Context, tournamentID string, round 
 	return err
 }
 
+// DuelLogKind - отметка в журнале матча: счёт после всех рейдов равный, идёт дуэль до первого нока.
+const DuelLogKind = "duel"
+
+// MatchDuel - идёт ли дуэль: рейды сыграны, исход решит первый нок.
+func MatchDuel(st models.MatchState) bool {
+	for _, l := range st.Log {
+		if l.Kind == DuelLogKind {
+			return true
+		}
+	}
+	return false
+}
+
 // raidTally - что сторона набрала в раунде: очки целиком, ноки и задания.
 type raidTally struct {
 	points, knocks int
@@ -510,6 +523,10 @@ func liveChance(st models.MatchState, parts [2]models.Participant, setup matchSe
 	}
 
 	cur := st.CurrentRound
+	// Дуэль: рейды сыграны все, шанс - кто выиграет её.
+	if MatchDuel(st) {
+		cur = len(setup.Rounds) + 1
+	}
 	focusSide := 0
 	if i, ok := sideOf[focus]; ok {
 		focusSide = i

@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/battle-for-respect/backend/internal/models"
+	"github.com/battle-for-respect/backend/internal/store"
 )
 
 // publishMatchOverlay считает для оверлея счёт и задания, а раскладку и сторону «в рейде» берёт
@@ -201,6 +202,7 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 		Stage:          st.Stage,
 		ShowStandings:  stored.ShowStandings,
 		Layout:         stored.Layout,
+		Duel:           store.MatchDuel(st),
 	}
 	if stored.TournamentID != nil && *stored.TournamentID == t.ID {
 		ls.PatchFlashes = stored.PatchFlashes
