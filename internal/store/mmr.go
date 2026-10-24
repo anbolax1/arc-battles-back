@@ -141,6 +141,20 @@ func (s *Store) BestTeamMmr(ctx context.Context, userID string) (int, error) {
 	return *mmr, nil
 }
 
+// BestTeamPeakMmr - лучший MMR 2×2 в профиле: пик самой сильной команды игрока за все сезоны,
+// как на странице команды (старт, если выше него команды не поднимались).
+func (s *Store) BestTeamPeakMmr(ctx context.Context, userID string) (int, error) {
+	var peak *int
+	err := s.Pool.QueryRow(ctx, `
+		SELECT MAX(h.mmr_after) FROM team_mmr_history h
+		JOIN team_mmr tm ON tm.team_key = h.team_key
+		WHERE tm.member_a = $1 OR tm.member_b = $1`, userID).Scan(&peak)
+	if err != nil || peak == nil || *peak < StartMmr {
+		return StartMmr, err
+	}
+	return *peak, nil
+}
+
 // recomputeUserMmr обновляет кэш user_mmr - MMR игрока в текущем сезоне. Строка есть только у
 // тех, кто в этом сезоне играл: по ним считается место в таблице.
 func (s *Store) recomputeUserMmr(ctx context.Context, userID, mode string) error {

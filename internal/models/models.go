@@ -505,6 +505,9 @@ type PlayerStats struct {
 
 	FavoriteMap       string `json:"favoriteMap"`
 	FavoriteMapRounds int    `json:"favoriteMapRounds"`
+
+	// Первый сыгранный матч любого формата: у mmr1x1.firstMatch - только 1×1.
+	FirstMatch *time.Time `json:"firstMatch,omitempty"`
 }
 
 // PlayerProfile — публичный профиль игрока: пользователь + статы + история (B6).
@@ -512,6 +515,7 @@ type PlayerProfile struct {
 	User        User                `json:"user"`
 	MmrSolo     int                 `json:"mmrSolo"` // MMR в режиме 1x1 (старт 1000)
 	MmrDuo      int                 `json:"mmrDuo"`  // лучший MMR среди команд игрока (2x2)
+	PeakDuo     int                 `json:"peakDuo"` // пик лучшей команды игрока за все сезоны (2x2)
 	Points      int                 `json:"points"`
 	Wins        int                 `json:"wins"`
 	Tournaments int                 `json:"tournaments"`

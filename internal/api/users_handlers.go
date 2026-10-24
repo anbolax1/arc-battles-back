@@ -127,6 +127,9 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		}
 		points += h.Points
 		tournaments++
+		if h.Date != nil && (stats.FirstMatch == nil || h.Date.Before(*stats.FirstMatch)) {
+			stats.FirstMatch = h.Date
+		}
 		if h.Voided {
 			continue
 		}
@@ -166,6 +169,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 	mmrSolo, _ := s.Store.GetUserMmr(r.Context(), u.ID, "1x1")
 	// 2×2 — рейтинг у команд; для профиля показываем лучший MMR среди команд игрока.
 	mmrDuo, _ := s.Store.BestTeamMmr(r.Context(), u.ID)
+	peakDuo, _ := s.Store.BestTeamPeakMmr(r.Context(), u.ID)
 	// Расширенная статистика 1×1 (по истории MMR) + аналитика + команды игрока.
 	mmr1x1, timeline, analytics, _ := s.Store.PlayerStatsBundle(r.Context(), u.ID)
 	teams, _ := s.Store.TeamsForUser(r.Context(), u.ID)
@@ -177,6 +181,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		User:        u,
 		MmrSolo:     mmrSolo,
 		MmrDuo:      mmrDuo,
+		PeakDuo:     peakDuo,
 		Points:      points,
 		Wins:        wins,
 		Tournaments: tournaments,
