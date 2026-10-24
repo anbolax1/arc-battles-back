@@ -28,8 +28,8 @@ func seasonWinnerTagName(season string) string {
 
 const tagCols = `t.id, t.name, t.color, t.visible, COALESCE(t.role, ''), COALESCE(t.code, ''), t.season_id, COALESCE(sn.name, '')`
 
-// tagOrder - сначала роли, затем победители сезонов (свежие выше), теги с кодом, затем остальные.
-const tagOrder = `(t.role IS NULL), (t.season_id IS NULL), (t.code IS NULL), sn.started_at DESC`
+// tagOrder - сначала роли, затем победители сезонов по порядку сезонов, теги с кодом, затем остальные.
+const tagOrder = `(t.role IS NULL), (t.season_id IS NULL), (t.code IS NULL), sn.started_at`
 
 // roleLevel - уровень роли из колонки col по той же иерархии, что и права доступа; 0 - не роль.
 func roleLevel(col string) string {
