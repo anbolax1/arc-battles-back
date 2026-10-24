@@ -28,7 +28,8 @@ var PatchCodes = []string{
 const (
 	patchStreakWins   = 5   // «Неудержимый»: побед подряд
 	patchFlawlessWins = 5   // «Без поражений»: побед за сезон без единого поражения
-	patchUnderdog     = 0.4 // «Против шансов»: шанс победы по рейтингу не выше этого
+	patchUnderdog     = 0.4 // «Против шансов» до patchChanceFrom: шанс по рейтингу перед матчем не выше этого
+	patchChanceFrom   = 4   // с этого сезона «Против шансов» - по шансу на победу между рейдами, ступенями
 	patchClearKnocks  = 8   // «Зачистка»: ноков за один рейд
 	patchKingWins     = 3   // «Король карты»: меньше побед на карте - не король
 	patchMarathon     = 20  // «Марафонец»: матчей за сезон
@@ -41,8 +42,12 @@ var patchHunterTiers = []int{10, 25, 50}
 // patchExecutorTiers - ступени «Исполнителя»: своих выполненных заданий за сезон.
 var patchExecutorTiers = []int{10, 25, 50}
 
+// patchDavidTiers - ступени «Против шансов»: до скольки процентов падал шанс победителя перед матчем
+// или сразу после рейда.
+var patchDavidTiers = []int{30, 20, 10}
+
 // patchTiers - нашивки со ступенями.
-var patchTiers = map[string][]int{"executor": patchExecutorTiers, "hunter": patchHunterTiers}
+var patchTiers = map[string][]int{"executor": patchExecutorTiers, "hunter": patchHunterTiers, "david": patchDavidTiers}
 
 // tiersReached - ступени, которые счётчик прошёл, вырастая с before до after.
 func tiersReached(tiers []int, before, after int) []int {
@@ -79,6 +84,8 @@ type patchMatch struct {
 	sides       [2]patchSide
 	maps        []string       // карты матча для «Короля карты»
 	roundMaps   map[int]string // карта каждого раунда
+	chance      bool           // шанс матча известен: у него есть рейды
+	minWin      [2]float64     // самый низкий шанс стороны на победу перед матчем и между рейдами
 }
 
 // patchMmrFix - сверка рейтинга между матчами: от неё зависит, кто лидер таблицы.
@@ -113,6 +120,7 @@ type patchPlayer struct {
 	streak, bestStreak          int
 	knocks, tasks               int
 	david, comeback, double     int
+	davidBest                   float64 // самый низкий шанс, при котором была победа
 	lostTo                      map[string]bool
 	mapWins                     map[string]int
 	bestRound                   map[string]any
@@ -138,6 +146,7 @@ func sumKnocks(k map[int]int) int {
 func computeSeasonPatches(in patchInput) []patchAward {
 	final := in.season.Status == "finished"
 	knocksKept := in.season.Number != nil && *in.season.Number >= patchKnocksKept
+	byChance := in.season.Number != nil && *in.season.Number >= patchChanceFrom
 	players := map[string]*patchPlayer{}
 	get := func(u string) *patchPlayer {
 		p := players[u]
@@ -305,7 +314,20 @@ func computeSeasonPatches(in patchInput) []patchAward {
 			if lead[l.user] && !lead[w.user] {
 				award(w.user, "regicide", 1, m.id, m.at, map[string]any{"opp": l.name})
 			}
-			if w.rated && l.rated && expectedScore(w.before, l.before) <= patchUnderdog {
+			switch {
+			case byChance:
+				if mw := m.minWin[m.winner]; m.chance && mw*100 <= float64(patchDavidTiers[0]) {
+					pw.david++
+					if pw.david == 1 || mw < pw.davidBest {
+						pw.davidBest = mw
+					}
+					for t, limit := range patchDavidTiers {
+						if mw*100 <= float64(limit) {
+							award(w.user, "david", t+1, m.id, m.at, nil)
+						}
+					}
+				}
+			case w.rated && l.rated && expectedScore(w.before, l.before) <= patchUnderdog:
 				pw.david++
 				award(w.user, "david", 1, m.id, m.at, nil)
 			}
@@ -439,6 +461,9 @@ func computeSeasonPatches(in patchInput) []patchAward {
 			a.detail = map[string]any{"best": p.bestStreak}
 		case "david":
 			a.detail = map[string]any{"n": p.david}
+			if byChance {
+				a.detail["chance"] = int(math.Round(p.davidBest * 100))
+			}
 		case "comeback":
 			a.detail = map[string]any{"n": p.comeback}
 		case "double":
@@ -469,7 +494,7 @@ func patchMapKey(name string) string {
 }
 
 // loadPatchInput собирает матчи сезона с рейтингом до и после, очками, ноками и картами.
-func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *models.Season) (patchInput, error) {
+func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *models.Season, chances map[string]matchChances) (patchInput, error) {
 	in := patchInput{season: sn, prevGames: map[string]int{}}
 	const scope = `t.season_id = $1 AND t.mode = '1x1' AND t.status IN ('finished', 'live')`
 
@@ -494,6 +519,9 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 			return in, err
 		}
 		m.live = status == "live"
+		if h, ok := chances[m.id]; ok && len(h.Raids) > 0 {
+			m.chance, m.minWin = true, h.MinWin
+		}
 		var names []string
 		_ = json.Unmarshal(maps, &names)
 		listMaps[m.id] = names
@@ -777,6 +805,12 @@ func (s *Store) SyncPatches(ctx context.Context) ([]PatchNew, error) {
 		return nil, err
 	}
 
+	// Шанс на победу между рейдами нужен «Против шансов»; история шансов сверяется с базой сейчас.
+	snap, err := s.chances(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("шансы: %w", err)
+	}
+
 	beltIn, _, err := s.loadBeltInput(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("пояс: %w", err)
@@ -789,7 +823,7 @@ func (s *Store) SyncPatches(ctx context.Context) ([]PatchNew, error) {
 		if i > 0 {
 			prev = &seasons[i-1]
 		}
-		in, err := s.loadPatchInput(ctx, sn, prev)
+		in, err := s.loadPatchInput(ctx, sn, prev, snap.matches)
 		if err != nil {
 			return nil, fmt.Errorf("сезон %s: %w", sn.Name, err)
 		}

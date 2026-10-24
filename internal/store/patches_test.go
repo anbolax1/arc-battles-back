@@ -294,3 +294,39 @@ func TestPatchVoidedMatch(t *testing.T) {
 		t.Fatalf("незасчитанный матч сыгран - «Ветеран» за него остаётся: %+v", a)
 	}
 }
+
+// С 4 сезона «Против шансов» - по самому низкому шансу победителя между рейдами, ступенями 30, 20 и 10%.
+func TestPatchDavidByChance(t *testing.T) {
+	four := 4
+	sn := models.Season{ID: "s4", Number: &four, Status: "active", StartedAt: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)}
+	at := sn.StartedAt.Add(time.Hour)
+	match := func(id string, minWin float64) patchMatch {
+		at = at.Add(time.Hour)
+		return patchMatch{
+			id: id, at: at, winner: 0, mult: 1, games: 1, chance: true, minWin: [2]float64{minWin, 0.2},
+			sides: [2]patchSide{{pid: id + "a", user: "u1", name: "A", total: 9}, {pid: id + "b", user: "u2", name: "B", total: 5}},
+		}
+	}
+	in := patchInput{season: sn, prevGames: map[string]int{}, matches: []patchMatch{
+		match("m1", 0.45),
+		match("m2", 0.27),
+		match("m3", 0.18),
+	}}
+	tiers := map[int]string{}
+	for _, a := range computeSeasonPatches(in) {
+		if a.code == "david" && a.user == "u1" {
+			tiers[a.tier] = a.match
+		}
+	}
+	if tiers[1] != "m2" || tiers[2] != "m3" || tiers[3] != "" {
+		t.Fatalf("ступени: %v", tiers)
+	}
+	// Без шанса (матч без рейдов) нашивки нет, даже если победа.
+	in.matches = []patchMatch{match("m4", 0.1)}
+	in.matches[0].chance = false
+	for _, a := range computeSeasonPatches(in) {
+		if a.code == "david" {
+			t.Fatalf("без шанса нашивки быть не должно: %+v", a)
+		}
+	}
+}
