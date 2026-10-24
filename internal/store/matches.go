@@ -521,6 +521,26 @@ func (s *Store) RescoreFinishedMatch(ctx context.Context, tournamentID string) (
 	return true, s.RecomputeAllMmr(ctx)
 }
 
+// SetMatchVoided не засчитывает исход завершённого матча (проигравшему возвращается MMR) или засчитывает
+// его снова. MMR пересчитывается по всем матчам: с рейтингом проигравшего он идёт в следующие.
+func (s *Store) SetMatchVoided(ctx context.Context, tournamentID string, voided bool, reason string) error {
+	var was bool
+	if err := s.Pool.QueryRow(ctx, `SELECT voided FROM tournaments WHERE id = $1`, tournamentID).Scan(&was); err != nil {
+		return err
+	}
+	if !voided {
+		reason = ""
+	}
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE tournaments SET voided = $2, void_reason = $3, updated_at = now() WHERE id = $1`, tournamentID, voided, reason); err != nil {
+		return err
+	}
+	if was == voided {
+		return nil
+	}
+	return s.RecomputeAllMmr(ctx)
+}
+
 // AdjustRoundPoints добавляет стороне ручные очки за раунд; поправка не съедает очки за ноки, поэтому
 // фактическое изменение может быть меньше запрошенного.
 func (s *Store) AdjustRoundPoints(ctx context.Context, roundID, participantID string, delta int) (int, error) {

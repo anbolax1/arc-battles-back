@@ -132,6 +132,7 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/tournaments/{id}/preview", s.handleDeletePreview)
 			r.Post("/tournaments/{id}/finish", s.handleFinishMatch)
 			r.Post("/tournaments/{id}/cancel", s.handleCancelMatch)
+			r.Post("/tournaments/{id}/void", s.handleVoidMatch)
 			r.Post("/tournaments/{id}/focus", s.handleMatchFocus)
 			r.Post("/tournaments/{id}/points", s.handleMatchPoints)
 			r.Post("/tournaments/{id}/knocks", s.handleMatchKnock)

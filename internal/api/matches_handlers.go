@@ -582,6 +582,46 @@ func (s *Server) handleCancelMatch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxVoidReason - причина стоит на странице матча одной строкой.
+const maxVoidReason = 120
+
+// POST /api/tournaments/{id}/void {voided, reason} - не засчитать исход завершённого матча (проигравшему
+// возвращается MMR) или засчитать его снова.
+func (s *Server) handleVoidMatch(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var b struct {
+		Voided bool   `json:"voided"`
+		Reason string `json:"reason"`
+	}
+	if err := readJSON(r, &b); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	reason := strings.TrimSpace(b.Reason)
+	if utf8.RuneCountInString(reason) > maxVoidReason {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("причина — до %d символов", maxVoidReason))
+		return
+	}
+	t, err := s.Store.GetTournament(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "матч не найден")
+		return
+	}
+	if t.Status != "finished" {
+		writeError(w, http.StatusConflict, "матч ещё не завершён")
+		return
+	}
+	if b.Voided && (t.WinnerParticipantID == nil || *t.WinnerParticipantID == "") {
+		writeError(w, http.StatusConflict, "в ничьей MMR не менялся — возвращать нечего")
+		return
+	}
+	if err := s.Store.SetMatchVoided(r.Context(), id, b.Voided, reason); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeMatch(w, r, id, http.StatusOK)
+}
+
 // POST /api/tournaments/{id}/focus {participantId} - чья сторона сейчас в рейде (только для оверлея).
 func (s *Server) handleMatchFocus(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

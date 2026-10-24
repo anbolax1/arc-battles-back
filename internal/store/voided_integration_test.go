@@ -89,11 +89,8 @@ func TestVoidedMatchIntegration(t *testing.T) {
 	}
 	start := st.ActiveSeasonStart(ctx)
 
-	if _, err := pool.Exec(ctx, `UPDATE tournaments SET voided = true, void_reason = 'читеры' WHERE id = $1`, m1); err != nil {
-		t.Fatalf("отметка: %v", err)
-	}
-	if err := st.RecomputeAllMmr(ctx); err != nil {
-		t.Fatalf("RecomputeAllMmr: %v", err)
+	if err := st.SetMatchVoided(ctx, m1, true, "читеры"); err != nil {
+		t.Fatalf("SetMatchVoided: %v", err)
 	}
 
 	// Победителю MMR остаётся, проигравшему возвращается - и следующий матч он начинает со старта.
@@ -143,5 +140,17 @@ func TestVoidedMatchIntegration(t *testing.T) {
 		if h.TournamentID == m1 && (!h.Voided || h.MmrDelta == nil || *h.MmrDelta != 0) {
 			t.Errorf("матч в истории b: незасчитан %v, MMR %v; want незасчитан и MMR не изменился", h.Voided, h.MmrDelta)
 		}
+	}
+
+	// Засчитали обратно: поражение снова списывает MMR, и второй матч b начинает уже ниже старта.
+	if err := st.SetMatchVoided(ctx, m1, false, ""); err != nil {
+		t.Fatalf("SetMatchVoided(false): %v", err)
+	}
+	if got := before(m2, b); got >= start {
+		t.Errorf("MMR b перед вторым матчем после отмены возврата = %d, want меньше %d", got, start)
+	}
+	var reason string
+	if err := pool.QueryRow(ctx, `SELECT void_reason FROM tournaments WHERE id = $1`, m1).Scan(&reason); err != nil || reason != "" {
+		t.Errorf("причина после отмены возврата = %q (%v), want пусто", reason, err)
 	}
 }
