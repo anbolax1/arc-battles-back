@@ -113,6 +113,11 @@ func (s *Server) Router() http.Handler {
 			// Матч 3 сезона: создание, пики-баны, раунды, зачёт, ручные очки, журнал, завершение.
 			r.Get("/match-players", s.handleListMatchPlayers)
 			r.Post("/players/placeholder", s.handleCreatePlaceholder)
+			// Команды 2×2: пара игроков с названием, её выбирают стороной матча.
+			r.Get("/match-teams", s.handleListMatchTeams)
+			r.Post("/teams", s.handleCreateTeam)
+			r.Patch("/teams/{teamKey}", s.handleUpdateTeam)
+			r.Delete("/teams/{teamKey}", s.handleDeleteTeam)
 			r.Post("/matches", s.handleCreateMatch)
 			r.Post("/tournaments/{id}/veto", s.handleVeto)
 			r.Post("/tournaments/{id}/veto/undo", s.handleVetoUndo)

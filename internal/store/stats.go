@@ -325,18 +325,20 @@ func (s *Store) TeamsForUser(ctx context.Context, userID string) ([]models.TeamS
 	return out, nil
 }
 
-// TeamMembers возвращает состав команды и её текущий MMR; ok=false, если команды нет.
+// TeamMembers возвращает состав команды и её текущий MMR; ok=false, если команды нет. Команда из списка
+// организатора есть и до первого матча: на её страницу ведёт анонс матча.
 func (s *Store) TeamMembers(ctx context.Context, teamKey string) ([]models.TeamMember, int, string, bool, error) {
 	var a, b models.TeamMember
 	var mmr int
 	var name string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT tm.mmr, tm.name, ua.id, ua.login, ua.display_name, ua.avatar_url,
+		SELECT COALESCE(tm.mmr, $2::int), COALESCE(tt.name, tm.name), ua.id, ua.login, ua.display_name, ua.avatar_url,
 		       ub.id, ub.login, ub.display_name, ub.avatar_url
-		FROM team_mmr tm
-		JOIN users ua ON ua.id = tm.member_a
-		JOIN users ub ON ub.id = tm.member_b
-		WHERE tm.team_key = $1`, teamKey).Scan(&mmr, &name,
+		FROM (SELECT $1::text AS team_key) k
+		LEFT JOIN team_mmr tm ON tm.team_key = k.team_key
+		LEFT JOIN teams tt ON tt.team_key = k.team_key
+		JOIN users ua ON ua.id = COALESCE(tm.member_a, tt.member_a)
+		JOIN users ub ON ub.id = COALESCE(tm.member_b, tt.member_b)`, teamKey, s.activeSeasonRule(ctx).Start).Scan(&mmr, &name,
 		&a.UserID, &a.Login, &a.DisplayName, &a.AvatarURL,
 		&b.UserID, &b.Login, &b.DisplayName, &b.AvatarURL)
 	if err != nil {

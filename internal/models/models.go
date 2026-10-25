@@ -266,6 +266,21 @@ type MatchPlayer struct {
 	PrevGames     int    `json:"prevGames"` // матчей в прошлых сезонах: при равном MMR сторона A - у кого меньше
 }
 
+// MatchTeam - команда 2×2 из списка организатора: для выбора стороны матча. MMR и счёт - в текущем сезоне.
+type MatchTeam struct {
+	TeamKey     string       `json:"teamKey"`
+	Name        string       `json:"name"`
+	Members     []TeamMember `json:"members"`
+	Mmr         int          `json:"mmr"`
+	Wins        int          `json:"wins"`
+	Losses      int          `json:"losses"`
+	IsNew       bool         `json:"isNew"`     // в текущем сезоне ещё не играла
+	PrevGames   int          `json:"prevGames"` // матчей в прошлых сезонах: при равном MMR сторона A - у кого меньше
+	Matches     int          `json:"matches"`   // матчей всего, с идущими и запланированными: у такой команды состав не меняется
+	LastMatchAt *time.Time   `json:"lastMatchAt,omitempty"`
+	CreatedAt   time.Time    `json:"createdAt"`
+}
+
 type Tournament struct {
 	ID                  string           `json:"id"`
 	Title               string           `json:"title"`

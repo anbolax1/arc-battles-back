@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
@@ -107,8 +106,14 @@ func teamKeyFromParticipant(p models.Participant) (key, memberA, memberB string,
 	if len(users) != 2 {
 		return "", "", "", false
 	}
-	sort.Strings(users)
-	return users[0] + "|" + users[1], users[0], users[1], true
+	key, memberA, memberB = teamPair(users[0], users[1])
+	return key, memberA, memberB, true
+}
+
+// ParticipantTeamKey - ключ команды стороны 2×2; ok=false - состав неполный.
+func ParticipantTeamKey(p models.Participant) (string, bool) {
+	key, _, _, ok := teamKeyFromParticipant(p)
+	return key, ok
 }
 
 // userSeasonMmr - MMR игрока в сезоне: стартовый MMR сезона плюс изменения за его матчи.
@@ -176,14 +181,20 @@ func (s *Store) recomputeUserMmr(ctx context.Context, userID, mode string) error
 	return err
 }
 
-// ensureTeam гарантирует строку команды в team_mmr (состав и название).
+// ensureTeam гарантирует строку команды в team_mmr (состав и название). Название - из списка команд, если пара
+// там есть: после переименования рейтинг не должен вернуть название, под которым команда играла.
 func (s *Store) ensureTeam(ctx context.Context, key, memberA, memberB, name string) error {
 	_, err := s.Pool.Exec(ctx, `
 		INSERT INTO team_mmr (team_key, member_a, member_b, mmr, name)
-		VALUES ($1,$2,$3,$4,$5)
+		VALUES ($1,$2,$3,$4, COALESCE((SELECT name FROM teams WHERE team_key = $1), $5))
 		ON CONFLICT (team_key) DO UPDATE SET name = EXCLUDED.name WHERE EXCLUDED.name <> ''`,
 		key, memberA, memberB, StartMmr, name)
 	return err
+}
+
+// GetTeamMmr - MMR команды 2×2 в текущем сезоне.
+func (s *Store) GetTeamMmr(ctx context.Context, key string) (int, error) {
+	return s.teamSeasonMmr(ctx, key, s.activeSeasonRule(ctx))
 }
 
 // teamSeasonMmr - MMR команды в сезоне: стартовый MMR сезона плюс изменения за её матчи.

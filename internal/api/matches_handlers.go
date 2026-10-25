@@ -219,9 +219,8 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		StartsAt         *time.Time `json:"startsAt"`
 		Prize            string     `json:"prize"`
 		Sides            []struct {
-			UserID  string   `json:"userId"`
-			Members []string `json:"members"`
-			Name    string   `json:"name"`
+			UserID  string `json:"userId"`
+			TeamKey string `json:"teamKey"`
 		} `json:"sides"`
 	}
 	if err := readJSON(r, &b); err != nil {
@@ -244,17 +243,18 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		Mode: b.Mode, PlayerType: b.PlayerType, RatingMultiplier: b.RatingMultiplier, Format: b.Format, Rounds: b.Rounds, StartsAt: b.StartsAt,
 		Prize: prize,
 	}
+	teams := b.Mode == "2x2"
 	for i, sd := range b.Sides {
-		if b.Mode == "2x2" {
-			if len(sd.Members) != 2 {
-				writeError(w, http.StatusBadRequest, "в команде 2×2 — два игрока")
-				return
-			}
-		} else if strings.TrimSpace(sd.UserID) == "" {
+		side := store.MatchSide{UserID: strings.TrimSpace(sd.UserID), TeamKey: strings.TrimSpace(sd.TeamKey)}
+		if teams && side.TeamKey == "" {
+			writeError(w, http.StatusBadRequest, "выберите команды обеих сторон")
+			return
+		}
+		if !teams && side.UserID == "" {
 			writeError(w, http.StatusBadRequest, "выберите игроков обеих сторон")
 			return
 		}
-		in.Sides[i] = store.MatchSide{UserID: strings.TrimSpace(sd.UserID), Members: sd.Members, Name: sd.Name}
+		in.Sides[i] = side
 	}
 	t, err := s.Store.CreateMatch(r.Context(), in)
 	if errors.Is(err, store.ErrLiveMatchExists) {
@@ -262,11 +262,19 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
-		writeError(w, http.StatusBadRequest, "стороны должны быть разными игроками")
+		msg := "стороны должны быть разными игроками"
+		if teams {
+			msg = "у команд не должно быть общих игроков"
+		}
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusBadRequest, "игрок не найден")
+		msg := "игрок не найден"
+		if teams {
+			msg = "команда не найдена"
+		}
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if err != nil {

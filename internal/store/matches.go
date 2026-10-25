@@ -20,11 +20,10 @@ var (
 	ErrNoMap = errors.New("у раунда нет карты")
 )
 
-// MatchSide - сторона нового матча: игрок (1×1) или пара игроков (2×2).
+// MatchSide - сторона нового матча: игрок (1×1) или команда из списка организатора (2×2).
 type MatchSide struct {
 	UserID  string
-	Members []string
-	Name    string
+	TeamKey string
 }
 
 // NewMatch - параметры нового матча.
@@ -60,39 +59,26 @@ func aGoesFirst(a, b sideInfo, coin func() bool) bool {
 // describeSide собирает участника стороны, его MMR в текущем сезоне и опыт прошлых сезонов.
 func (s *Store) describeSide(ctx context.Context, mode string, side MatchSide, rule seasonRule) (sideInfo, error) {
 	if mode == "2x2" {
-		if len(side.Members) != 2 || side.Members[0] == side.Members[1] {
-			return sideInfo{}, ErrConflict
-		}
-		members := make([]map[string]string, 0, 2)
-		names := make([]string, 0, 2)
-		for _, id := range side.Members {
-			u, err := s.GetUser(ctx, id)
-			if err != nil {
-				return sideInfo{}, err
-			}
-			members = append(members, map[string]string{"name": userName(u), "userId": u.ID})
-			names = append(names, userName(u))
-		}
-		raw, _ := json.Marshal(members)
-		name := strings.TrimSpace(side.Name)
-		if name == "" {
-			name = strings.Join(names, " & ")
-		}
-		p := models.Participant{Kind: "team", Name: name, Members: raw}
-		key, _, _, _ := teamKeyFromParticipant(p)
-		mmr, err := s.teamSeasonMmr(ctx, key, rule)
+		team, err := s.GetMatchTeam(ctx, side.TeamKey)
 		if err != nil {
 			return sideInfo{}, err
 		}
-		var prev int
-		if err := s.Pool.QueryRow(ctx,
-			`SELECT COUNT(DISTINCT tournament_id) FROM team_mmr_history WHERE team_key = $1 AND season_key <> $2`, key, rule.Key).Scan(&prev); err != nil {
-			return sideInfo{}, err
+		members := make([]map[string]string, 0, len(team.Members))
+		for _, m := range team.Members {
+			name := m.DisplayName
+			if strings.TrimSpace(name) == "" {
+				name = m.Login
+			}
+			members = append(members, map[string]string{"name": name, "userId": m.UserID})
 		}
-		return sideInfo{part: p, mmr: mmr, prevGames: prev}, nil
+		raw, _ := json.Marshal(members)
+		return sideInfo{part: models.Participant{Kind: "team", Name: team.Name, Members: raw}, mmr: team.Mmr, prevGames: team.PrevGames}, nil
 	}
 
 	u, err := s.GetUser(ctx, side.UserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sideInfo{}, ErrNotFound
+	}
 	if err != nil {
 		return sideInfo{}, err
 	}
@@ -114,6 +100,20 @@ func userName(u models.User) string {
 		return u.DisplayName
 	}
 	return u.Login
+}
+
+// sharePlayers - есть ли игрок в обеих сторонах: с ведущим он заходит только за одну.
+func sharePlayers(a, b models.Participant) bool {
+	in := map[string]bool{}
+	for _, id := range participantUsers(a) {
+		in[id] = true
+	}
+	for _, id := range participantUsers(b) {
+		if in[id] {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateMatch заводит матч: обычный сразу становится текущим, шоу-матч ждёт своего времени в расписании.
@@ -146,7 +146,7 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 	if err != nil {
 		return models.Tournament{}, err
 	}
-	if in.Mode == "1x1" && *a.part.UserID == *b.part.UserID {
+	if sharePlayers(a.part, b.part) {
 		return models.Tournament{}, ErrConflict
 	}
 	if !aGoesFirst(a, b, func() bool { return rand.IntN(2) == 0 }) {
