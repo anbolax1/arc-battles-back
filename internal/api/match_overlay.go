@@ -98,13 +98,18 @@ func (s *Server) withRaidSide(ctx context.Context, st *models.MatchState) {
 	}
 }
 
-// addStandingRatings добавляет сторонам табло MMR и место в таблице сезона; у завершённого матча
-// MMR берётся из его итога, чтобы рядом показать изменение.
+// addStandingRatings добавляет сторонам табло MMR и место в таблице сезона (у 2×2 - команды); у завершённого
+// матча MMR берётся из его итога, чтобы рядом показать изменение.
 func (s *Server) addStandingRatings(ctx context.Context, st models.MatchState, ls *models.LiveState) {
-	users := map[string]string{}
+	teams := st.Tournament.Mode == "2x2"
+	keys := map[string]string{}
 	for _, p := range st.Tournament.Participants {
-		if p.UserID != nil {
-			users[p.ID] = *p.UserID
+		if teams {
+			if key, ok := store.ParticipantTeamKey(p); ok {
+				keys[p.ID] = key
+			}
+		} else if p.UserID != nil {
+			keys[p.ID] = *p.UserID
 		}
 	}
 	changes := map[string]models.ParticipantMmr{}
@@ -115,19 +120,35 @@ func (s *Server) addStandingRatings(ctx context.Context, st models.MatchState, l
 	}
 	for i := range ls.Standings {
 		sd := &ls.Standings[i]
-		uid := users[sd.ParticipantID]
-		if uid == "" {
+		key := keys[sd.ParticipantID]
+		if key == "" {
 			continue
 		}
 		if c, ok := changes[sd.ParticipantID]; ok {
 			sd.Mmr, sd.MmrDelta = c.After, c.Delta
-		} else if mmr, err := s.Store.GetUserMmr(ctx, uid, "1x1"); err == nil {
+		} else if mmr, err := s.sideMmr(ctx, teams, key); err == nil {
 			sd.Mmr = mmr
 		}
-		if place, err := s.Store.Player1x1Place(ctx, uid); err == nil {
+		if place, err := s.sidePlace(ctx, teams, key); err == nil {
 			sd.Place, sd.IsNew = place, place == 0
 		}
 	}
+}
+
+// sideMmr - MMR стороны в текущем сезоне: игрока 1×1 или команды 2×2.
+func (s *Server) sideMmr(ctx context.Context, team bool, key string) (int, error) {
+	if team {
+		return s.Store.GetTeamMmr(ctx, key)
+	}
+	return s.Store.GetUserMmr(ctx, key, "1x1")
+}
+
+// sidePlace - место стороны в таблице сезона своего режима; 0 - в сезоне ещё не играла.
+func (s *Server) sidePlace(ctx context.Context, team bool, key string) (int, error) {
+	if team {
+		return s.Store.TeamPlace(ctx, key)
+	}
+	return s.Store.Player1x1Place(ctx, key)
 }
 
 // isMatchFlow - матч ведётся новым пультом (два раунда или пики-баны), его оверлей считает сервер.
