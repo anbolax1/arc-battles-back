@@ -149,6 +149,15 @@ type RoundKnocks struct {
 	Knocks        int    `json:"knocks"`
 }
 
+// RoundMemberScore - ноки и ручные очки игрока команды 2×2 за раунд; Points - вместе с очками за ноки.
+type RoundMemberScore struct {
+	RoundNumber   int    `json:"roundNumber"`
+	ParticipantID string `json:"participantId"`
+	UserID        string `json:"userId"`
+	Points        int    `json:"points"`
+	Knocks        int    `json:"knocks"`
+}
+
 // MatchState - всё о матче одним ответом: шапка, пики-баны, задания, очки по раундам и журнал.
 type MatchState struct {
 	Tournament   Tournament            `json:"tournament"`
@@ -161,6 +170,7 @@ type MatchState struct {
 	Scores       []RoundScore          `json:"scores"`
 	Manual       []RoundScore          `json:"manual"` // вместе с очками за ноки
 	Knocks       []RoundKnocks         `json:"knocks"`
+	Members      []RoundMemberScore    `json:"members"` // ноки и ручные очки по игрокам команд 2×2
 	Log          []MatchLogEntry       `json:"log"`
 	Patches      []MatchPatch          `json:"patches"`          // нашивки, полученные в этом матче
 	Focus        string                `json:"focus,omitempty"`  // сторона в рейде: её задания и счёт показывает оверлей
@@ -933,6 +943,8 @@ type RoundBonusTask struct {
 	Kind          string  `json:"kind"`                  // pve | pvp | pvpve
 	Times         int     `json:"times"`                 // legacy-счётчик (не используется в скоринге контрактов)
 	CompletedBy   *string `json:"completedBy,omitempty"` // кто выполнил: владелец - очки задания, противник - +1, nil - не выполнено
+	// Игрок команды 2×2, которому засчитано задание.
+	CompletedUser *string `json:"completedUserId,omitempty"`
 	Name          string  `json:"name,omitempty"`
 	Category      string  `json:"category"`          // task | protocol
 	Tag           string  `json:"tag"`               // тег задания из каталога

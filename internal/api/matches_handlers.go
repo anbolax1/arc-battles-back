@@ -662,7 +662,35 @@ func (s *Server) recordRaidStart(ctx context.Context, tournamentID string, round
 	}
 }
 
-// POST /api/round-bonus-tasks/{id}/mark {by: owner|opponent|none} - зачёт задания в пульте.
+// teamPlayer - игрок команды 2×2, которому идёт зачёт: у команды он обязателен и должен быть из её состава, у
+// стороны из одного игрока не нужен (пусто). label - чей зачёт в журнале: «Команда · Ник» или ник игрока.
+func (s *Server) teamPlayer(w http.ResponseWriter, r *http.Request, participantID, userID string) (player, label string, ok bool) {
+	p, err := s.Store.GetParticipant(r.Context(), participantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
+		return "", "", false
+	}
+	if p.Kind != "team" {
+		return "", p.Name, true
+	}
+	if !store.IsTeamMember(p, userID) {
+		writeError(w, http.StatusBadRequest, "укажите игрока команды")
+		return "", "", false
+	}
+	u, err := s.Store.GetUser(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "игрок не найден")
+		return "", "", false
+	}
+	nick := u.DisplayName
+	if strings.TrimSpace(nick) == "" {
+		nick = u.Login
+	}
+	return u.ID, p.Name + " · " + nick, true
+}
+
+// POST /api/round-bonus-tasks/{id}/mark {by: owner|opponent|none, userId} - зачёт задания в пульте; задание команды
+// 2×2 засчитывается её игроку userId - тому, кто его выполнил.
 func (s *Server) handleMarkTask(w http.ResponseWriter, r *http.Request) {
 	asgID := chi.URLParam(r, "id")
 	task, tid, err := s.Store.GetBonusAssignment(r.Context(), asgID)
@@ -679,13 +707,25 @@ func (s *Server) handleMarkTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b struct {
-		By string `json:"by"`
+		By     string `json:"by"`
+		UserID string `json:"userId"`
 	}
 	if err := readJSON(r, &b); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	res, err := s.Store.MarkTask(r.Context(), asgID, b.By)
+	names := s.participantNames(r, tid)
+	player, owner := "", names[task.ParticipantID]
+	if b.By == "owner" {
+		if player, owner, ok = s.teamPlayer(w, r, task.ParticipantID, strings.TrimSpace(b.UserID)); !ok {
+			return
+		}
+	}
+	res, err := s.Store.MarkTask(r.Context(), asgID, b.By, player)
+	if errors.Is(err, store.ErrTaskTaken) {
+		writeError(w, http.StatusConflict, "задание уже засчитано другому игроку команды — сначала отмените зачёт")
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, "это задание противнику не засчитать")
 		return
@@ -696,7 +736,6 @@ func (s *Server) handleMarkTask(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recomputeMany(r, res.Affected)
 
-	names := s.participantNames(r, tid)
 	title := task.Name
 	if title == "" {
 		title = task.Text
@@ -708,12 +747,12 @@ func (s *Server) handleMarkTask(w http.ResponseWriter, r *http.Request) {
 	case res.Target == nil:
 		text = fmt.Sprintf("Зачёт снят: «%s»", title)
 	case *res.Target == task.ParticipantID:
-		text, delta, who = fmt.Sprintf("%s: «%s»", names[task.ParticipantID], title), task.Points, res.Target
+		text, delta, who = fmt.Sprintf("%s: «%s»", owner, title), task.Points, res.Target
 	default:
 		text, delta, who = fmt.Sprintf("%s: задание соперника «%s»", names[*res.Target], title), store.ContractCrossPoints, res.Target
 	}
 	_ = s.Store.AddMatchLog(r.Context(), tid, task.RoundNumber, who, "task", text, delta, map[string]any{
-		"type": "task", "assignmentId": asgID, "prev": res.Prev, "target": res.Target,
+		"type": "task", "assignmentId": asgID, "prev": res.Prev, "prevUser": res.PrevUser, "target": res.Target,
 	})
 	if finished && !s.rescore(w, r, tid) {
 		return
@@ -800,25 +839,27 @@ func (s *Server) scoreRound(w http.ResponseWriter, r *http.Request, tournamentID
 	return rd, true, false
 }
 
-// scoreSide - раунд правки и имена сторон матча; если раунда нет или сторона чужая, отвечает ошибкой.
-func (s *Server) scoreSide(w http.ResponseWriter, r *http.Request, tournamentID, participantID string, number int) (rd models.Round, names map[string]string, finished, ok bool) {
+// scoreSide - раунд правки и чей зачёт: сторона матча, а у команды 2×2 - ещё и её игрок; если раунда нет, сторона
+// чужая или игрок не из команды, отвечает ошибкой.
+func (s *Server) scoreSide(w http.ResponseWriter, r *http.Request, tournamentID, participantID, userID string, number int) (rd models.Round, player, who string, finished, ok bool) {
 	if rd, finished, ok = s.scoreRound(w, r, tournamentID, number); !ok {
-		return rd, nil, finished, false
+		return rd, "", "", finished, false
 	}
-	names = s.participantNames(r, tournamentID)
-	if _, ok := names[participantID]; !ok {
+	if _, in := s.participantNames(r, tournamentID)[participantID]; !in {
 		writeError(w, http.StatusBadRequest, "сторона не из этого матча")
-		return rd, nil, finished, false
+		return rd, "", "", finished, false
 	}
-	return rd, names, finished, true
+	player, who, ok = s.teamPlayer(w, r, participantID, strings.TrimSpace(userID))
+	return rd, player, who, finished, ok
 }
 
-// POST /api/tournaments/{id}/points {participantId, delta, label, round} - ручные очки за идущий раунд;
-// round - номер сыгранного раунда, когда исправляют завершённый матч.
+// POST /api/tournaments/{id}/points {participantId, userId, delta, label, round} - ручные очки за идущий раунд, у
+// команды 2×2 - её игроку userId; round - номер сыгранного раунда, когда исправляют завершённый матч.
 func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var b struct {
 		ParticipantID string `json:"participantId"`
+		UserID        string `json:"userId"`
 		Delta         int    `json:"delta"`
 		Label         string `json:"label"`
 		Round         int    `json:"round"`
@@ -827,11 +868,17 @@ func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "укажите сторону и очки")
 		return
 	}
-	rd, names, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.Round)
+	rd, player, who, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.UserID, b.Round)
 	if !ok {
 		return
 	}
-	applied, err := s.Store.AdjustRoundPoints(r.Context(), rd.ID, b.ParticipantID, b.Delta)
+	var applied int
+	var err error
+	if player != "" {
+		applied, err = s.Store.AdjustMemberPoints(r.Context(), rd.ID, b.ParticipantID, player, b.Delta)
+	} else {
+		applied, err = s.Store.AdjustRoundPoints(r.Context(), rd.ID, b.ParticipantID, b.Delta)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -843,8 +890,8 @@ func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 			label = "ручные очки"
 		}
 		pid := b.ParticipantID
-		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "points", names[pid]+": "+label, applied, map[string]any{
-			"type": "points", "roundId": rd.ID, "participantId": pid, "applied": applied,
+		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "points", who+": "+label, applied, map[string]any{
+			"type": "points", "roundId": rd.ID, "participantId": pid, "userId": player, "applied": applied,
 		})
 		if finished && !s.rescore(w, r, id) {
 			return
@@ -853,12 +900,14 @@ func (s *Server) handleMatchPoints(w http.ResponseWriter, r *http.Request) {
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
-// POST /api/tournaments/{id}/knocks {participantId, delta: 1|-1, round} - нок стороне в идущем раунде или
-// снять ошибочный; round - номер сыгранного раунда, когда исправляют завершённый матч.
+// POST /api/tournaments/{id}/knocks {participantId, userId, delta: 1|-1, round} - нок стороне в идущем раунде (у
+// команды 2×2 - её игроку userId) или снять ошибочный; round - номер сыгранного раунда, когда исправляют
+// завершённый матч.
 func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var b struct {
 		ParticipantID string `json:"participantId"`
+		UserID        string `json:"userId"`
 		Delta         int    `json:"delta"`
 		Round         int    `json:"round"`
 	}
@@ -866,11 +915,17 @@ func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "укажите сторону и нок")
 		return
 	}
-	rd, names, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.Round)
+	rd, player, who, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.UserID, b.Round)
 	if !ok {
 		return
 	}
-	applied, err := s.Store.AdjustKnocks(r.Context(), rd.ID, b.ParticipantID, b.Delta)
+	var applied int
+	var err error
+	if player != "" {
+		applied, err = s.Store.AdjustMemberKnocks(r.Context(), rd.ID, b.ParticipantID, player, b.Delta)
+	} else {
+		applied, err = s.Store.AdjustKnocks(r.Context(), rd.ID, b.ParticipantID, b.Delta)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -882,8 +937,8 @@ func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 			text = "нок снят"
 		}
 		pid := b.ParticipantID
-		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "knock", names[pid]+": "+text, applied*store.KnockPoints, map[string]any{
-			"type": "knock", "roundId": rd.ID, "participantId": pid, "applied": applied,
+		_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "knock", who+": "+text, applied*store.KnockPoints, map[string]any{
+			"type": "knock", "roundId": rd.ID, "participantId": pid, "userId": player, "applied": applied,
 		})
 		// Плашки новых нашивок - только на эфире: исправление после матча их не показывает.
 		if !finished {
@@ -895,20 +950,21 @@ func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
-// POST /api/tournaments/{id}/legendary {legendaryId, participantId, round} - легендарка стороне в идущем
-// раунде; round - номер сыгранного раунда, когда исправляют завершённый матч.
+// POST /api/tournaments/{id}/legendary {legendaryId, participantId, userId, round} - легендарка стороне в идущем
+// раунде, у команды 2×2 - её игроку userId; round - номер сыгранного раунда, когда исправляют завершённый матч.
 func (s *Server) handleMatchLegendary(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var b struct {
 		LegendaryID   string `json:"legendaryId"`
 		ParticipantID string `json:"participantId"`
+		UserID        string `json:"userId"`
 		Round         int    `json:"round"`
 	}
 	if err := readJSON(r, &b); err != nil || b.LegendaryID == "" || b.ParticipantID == "" {
 		writeError(w, http.StatusBadRequest, "укажите легендарку и сторону")
 		return
 	}
-	rd, finished, ok := s.scoreRound(w, r, id, b.Round)
+	rd, player, who, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.UserID, b.Round)
 	if !ok {
 		return
 	}
@@ -917,7 +973,7 @@ func (s *Server) handleMatchLegendary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "легендарка не найдена")
 		return
 	}
-	if err := s.Store.CompleteLegendaryInMatch(r.Context(), b.LegendaryID, id, b.ParticipantID, rd.Number); err != nil {
+	if err := s.Store.CompleteLegendaryInMatch(r.Context(), b.LegendaryID, id, b.ParticipantID, rd.Number, player); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			writeError(w, http.StatusConflict, "эта легендарка уже выполнена")
 			return
@@ -925,10 +981,9 @@ func (s *Server) handleMatchLegendary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	names := s.participantNames(r, id)
 	pid := b.ParticipantID
 	_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "legendary",
-		fmt.Sprintf("%s: легендарка «%s»", names[pid], legendaryTitle(leg.Text)), leg.Points, map[string]any{
+		fmt.Sprintf("%s: легендарка «%s»", who, legendaryTitle(leg.Text)), leg.Points, map[string]any{
 			"type": "legendary", "legendaryId": b.LegendaryID,
 		})
 	if finished && !s.rescore(w, r, id) {

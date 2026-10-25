@@ -11,7 +11,7 @@ import (
 // Контракты (бывш. бонусные задания). Владелец контракта = participant_id (кому выдан).
 // completed_by — кто фактически выполнил: владелец → +2 балла, противник → +1 балл, NULL → не выполнен.
 const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, ct.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
-	ct.name, ct.category, ct.tag, ` + dealtTaskMap
+	rbt.completed_user_id, ct.name, ct.category, ct.tag, ` + dealtTaskMap
 
 // dealtTaskMap - карта выданного задания: у задания на картах это карта раунда, у общего - пусто.
 const dealtTaskMap = `CASE WHEN cardinality(ct.map_codes) > 0 THEN COALESCE(r.map_code, '') ELSE '' END`
@@ -20,7 +20,7 @@ func scanRoundBonusTask(row pgx.Row) (models.RoundBonusTask, error) {
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.Name, &t.Category, &t.Tag, &t.MapCode)
+		&t.CompletedUser, &t.Name, &t.Category, &t.Tag, &t.MapCode)
 	return t, err
 }
 
@@ -147,11 +147,15 @@ func (s *Store) OpponentParticipant(ctx context.Context, roundID, participantID 
 	return oppID, err
 }
 
+// ErrTaskTaken - задание команды уже засчитано другому её игроку: выполнить его можно один раз.
+var ErrTaskTaken = errors.New("задание уже засчитано другому игроку")
+
 // MarkResult - итог отметки задания: прежний и новый исполнитель и чьи очки пересчитать.
 type MarkResult struct {
 	RoundID  string
 	Owner    string
 	Prev     *string
+	PrevUser *string
 	Target   *string
 	Affected []string
 }
@@ -159,18 +163,19 @@ type MarkResult struct {
 // MarkContract отмечает исполнителя контракта: by = owner (владелец) | opponent (противник, +1)
 // | none (снять отметку). Возвращает участников, чьи очки надо пересчитать (прежний + новый исполнитель).
 func (s *Store) MarkContract(ctx context.Context, id, by string) ([]string, error) {
-	res, err := s.MarkTask(ctx, id, by)
+	res, err := s.MarkTask(ctx, id, by, "")
 	return res.Affected, err
 }
 
-// MarkTask - отметка исполнителя задания. Протокол засчитывается только владельцу.
-func (s *Store) MarkTask(ctx context.Context, id, by string) (MarkResult, error) {
+// MarkTask - отметка исполнителя задания. Протокол засчитывается только владельцу. userID - игрок команды 2×2,
+// которому засчитано задание; у стороны из одного игрока пусто.
+func (s *Store) MarkTask(ctx context.Context, id, by, userID string) (MarkResult, error) {
 	var res MarkResult
 	var category string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT rbt.round_id, rbt.participant_id, rbt.completed_by, ct.category
+		SELECT rbt.round_id, rbt.participant_id, rbt.completed_by, rbt.completed_user_id, ct.category
 		FROM round_bonus_tasks rbt JOIN catalog_tasks ct ON ct.id = rbt.task_id
-		WHERE rbt.id = $1`, id).Scan(&res.RoundID, &res.Owner, &res.Prev, &category)
+		WHERE rbt.id = $1`, id).Scan(&res.RoundID, &res.Owner, &res.Prev, &res.PrevUser, &category)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return res, ErrNotFound
 	}
@@ -180,6 +185,9 @@ func (s *Store) MarkTask(ctx context.Context, id, by string) (MarkResult, error)
 
 	switch by {
 	case "owner":
+		if res.Prev != nil && *res.Prev == res.Owner && res.PrevUser != nil && *res.PrevUser != userID {
+			return res, ErrTaskTaken
+		}
 		// Зачёт владельцем имеет приоритет: ставится всегда и отменяет балл противника (перетирает completed_by).
 		res.Target = &res.Owner
 	case "opponent":
@@ -198,7 +206,11 @@ func (s *Store) MarkTask(ctx context.Context, id, by string) (MarkResult, error)
 	default:
 		return res, ErrConflict
 	}
-	if err := s.SetTaskCompletedBy(ctx, id, res.Target); err != nil {
+	var user *string
+	if res.Target != nil && userID != "" {
+		user = &userID
+	}
+	if err := s.SetTaskCompletedBy(ctx, id, res.Target, user); err != nil {
 		return res, err
 	}
 	set := map[string]bool{}
@@ -214,9 +226,9 @@ func (s *Store) MarkTask(ctx context.Context, id, by string) (MarkResult, error)
 	return res, nil
 }
 
-// SetTaskCompletedBy ставит исполнителя задания напрямую (для отмены из журнала).
-func (s *Store) SetTaskCompletedBy(ctx context.Context, id string, by *string) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE round_bonus_tasks SET completed_by = $2 WHERE id = $1`, id, by)
+// SetTaskCompletedBy ставит исполнителя задания напрямую (для отмены из журнала); user - игрок команды 2×2.
+func (s *Store) SetTaskCompletedBy(ctx context.Context, id string, by, user *string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE round_bonus_tasks SET completed_by = $2, completed_user_id = $3 WHERE id = $1`, id, by, user)
 	return err
 }
 
@@ -256,7 +268,7 @@ func (s *Store) GetBonusAssignment(ctx context.Context, id string) (models.Round
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.Name, &t.Category, &t.Tag, &t.MapCode, &tournamentID)
+		&t.CompletedUser, &t.Name, &t.Category, &t.Tag, &t.MapCode, &tournamentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, "", ErrNotFound
 	}

@@ -55,9 +55,11 @@ func (s *Store) UndoLastMatchLog(ctx context.Context, tournamentID string) ([]st
 		Type          string  `json:"type"`
 		AssignmentID  string  `json:"assignmentId"`
 		Prev          *string `json:"prev"`
+		PrevUser      *string `json:"prevUser"`
 		Target        *string `json:"target"`
 		RoundID       string  `json:"roundId"`
 		ParticipantID string  `json:"participantId"`
+		UserID        string  `json:"userId"` // игрок команды 2×2, кому ставили нок или ручные очки
 		Applied       int     `json:"applied"`
 		LegendaryID   string  `json:"legendaryId"`
 	}
@@ -66,7 +68,7 @@ func (s *Store) UndoLastMatchLog(ctx context.Context, tournamentID string) ([]st
 	affected := []string{}
 	switch u.Type {
 	case "task":
-		if err := s.SetTaskCompletedBy(ctx, u.AssignmentID, u.Prev); err != nil {
+		if err := s.SetTaskCompletedBy(ctx, u.AssignmentID, u.Prev, u.PrevUser); err != nil {
 			return nil, err
 		}
 		for _, p := range []*string{u.Prev, u.Target} {
@@ -75,12 +77,22 @@ func (s *Store) UndoLastMatchLog(ctx context.Context, tournamentID string) ([]st
 			}
 		}
 	case "points":
-		if _, err := s.AdjustRoundPoints(ctx, u.RoundID, u.ParticipantID, -u.Applied); err != nil {
+		if u.UserID != "" {
+			_, err = s.AdjustMemberPoints(ctx, u.RoundID, u.ParticipantID, u.UserID, -u.Applied)
+		} else {
+			_, err = s.AdjustRoundPoints(ctx, u.RoundID, u.ParticipantID, -u.Applied)
+		}
+		if err != nil {
 			return nil, err
 		}
 		affected = append(affected, u.ParticipantID)
 	case "knock":
-		if _, err := s.AdjustKnocks(ctx, u.RoundID, u.ParticipantID, -u.Applied); err != nil {
+		if u.UserID != "" {
+			_, err = s.AdjustMemberKnocks(ctx, u.RoundID, u.ParticipantID, u.UserID, -u.Applied)
+		} else {
+			_, err = s.AdjustKnocks(ctx, u.RoundID, u.ParticipantID, -u.Applied)
+		}
+		if err != nil {
 			return nil, err
 		}
 		affected = append(affected, u.ParticipantID)
@@ -149,6 +161,24 @@ func (s *Store) GetMatchState(ctx context.Context, tournamentID string) (models.
 		}
 		add(manual, n, pid, pts)
 		add(knocks, n, pid, k)
+	}
+	rows.Close()
+	st.Members = []models.RoundMemberScore{}
+	rows, err = s.Pool.Query(ctx, `
+		SELECT r.number, me.participant_id, me.user_id, me.points, me.knocks
+		FROM round_member_entries me JOIN rounds r ON r.id = me.round_id
+		WHERE r.tournament_id = $1
+		ORDER BY r.number`, tournamentID)
+	if err != nil {
+		return st, err
+	}
+	for rows.Next() {
+		var m models.RoundMemberScore
+		if err := rows.Scan(&m.RoundNumber, &m.ParticipantID, &m.UserID, &m.Points, &m.Knocks); err != nil {
+			rows.Close()
+			return st, err
+		}
+		st.Members = append(st.Members, m)
 	}
 	rows.Close()
 	main := map[int]map[string]int{}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -590,6 +591,66 @@ func (s *Store) saveRoundEntryCounts(ctx context.Context, roundID, participantID
 	return err
 }
 
+// AdjustMemberPoints добавляет ручные очки игроку команды 2×2; поправка не съедает его очки за ноки, поэтому
+// фактическое изменение может быть меньше запрошенного.
+func (s *Store) AdjustMemberPoints(ctx context.Context, roundID, participantID, userID string, delta int) (int, error) {
+	points, _, err := s.adjustMember(ctx, roundID, participantID, userID, func(points, knocks int) (int, int) {
+		return max(points+delta, knocks*KnockPoints) - points, 0
+	})
+	return points, err
+}
+
+// AdjustMemberKnocks засчитывает нок игроку команды 2×2 вместе с его очками или снимает ошибочный; ноков у игрока
+// не бывает меньше нуля, поэтому фактическое изменение может быть меньше запрошенного.
+func (s *Store) AdjustMemberKnocks(ctx context.Context, roundID, participantID, userID string, delta int) (int, error) {
+	_, knocks, err := s.adjustMember(ctx, roundID, participantID, userID, func(_, knocks int) (int, int) {
+		applied := max(knocks+delta, 0) - knocks
+		return applied * KnockPoints, applied
+	})
+	return knocks, err
+}
+
+// adjustMember меняет очки и ноки игрока команды и на столько же - строку его стороны: по ней считаются счёт, шанс
+// и статистика. change по нынешним очкам и нокам игрока отдаёт, на сколько их поменять.
+func (s *Store) adjustMember(ctx context.Context, roundID, participantID, userID string, change func(points, knocks int) (int, int)) (dPoints, dKnocks int, err error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback(ctx)
+	var points, knocks int
+	err = tx.QueryRow(ctx, `
+		SELECT points, knocks FROM round_member_entries
+		WHERE round_id = $1 AND participant_id = $2 AND user_id = $3 FOR UPDATE`, roundID, participantID, userID).Scan(&points, &knocks)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, err
+	}
+	dPoints, dKnocks = change(points, knocks)
+	if dPoints == 0 && dKnocks == 0 {
+		return 0, 0, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO round_member_entries (round_id, participant_id, user_id, points, knocks) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (round_id, participant_id, user_id) DO UPDATE
+			SET points = EXCLUDED.points, knocks = EXCLUDED.knocks, updated_at = now()`,
+		roundID, participantID, userID, points+dPoints, knocks+dKnocks); err != nil {
+		return 0, 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO round_entries (round_id, participant_id, points, knocks) VALUES ($1, $2, GREATEST($3::int, 0), GREATEST($4::int, 0))
+		ON CONFLICT (round_id, participant_id) DO UPDATE
+			SET points = GREATEST(round_entries.points + $3::int, 0), knocks = GREATEST(round_entries.knocks + $4::int, 0), updated_at = now()`,
+		roundID, participantID, dPoints, dKnocks); err != nil {
+		return 0, 0, err
+	}
+	return dPoints, dKnocks, tx.Commit(ctx)
+}
+
+// IsTeamMember - играет ли userID за эту сторону.
+func IsTeamMember(p models.Participant, userID string) bool {
+	return userID != "" && slices.Contains(participantUsers(p), userID)
+}
+
 // ListMatchPlayers - игроки для выбора сторон: MMR и счёт в текущем сезоне, сыгравшие сверху.
 func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, error) {
 	rule := s.activeSeasonRule(ctx)
@@ -641,14 +702,23 @@ func (s *Store) CreatePlaceholderUser(ctx context.Context, nickname string) (mod
 	return u, err == nil, err
 }
 
-// CompleteLegendaryInMatch засчитывает легендарку стороне в раунде матча (навсегда).
-func (s *Store) CompleteLegendaryInMatch(ctx context.Context, legendaryID, tournamentID, participantID string, roundNumber int) error {
+// CompleteLegendaryInMatch засчитывает легендарку стороне в раунде матча (навсегда). У команды 2×2 она на счету
+// её игрока userID - он и попадает в список выполнивших.
+func (s *Store) CompleteLegendaryInMatch(ctx context.Context, legendaryID, tournamentID, participantID string, roundNumber int, userID string) error {
 	p, err := s.GetParticipant(ctx, participantID)
 	if err != nil {
 		return err
 	}
 	if p.TournamentID != tournamentID {
 		return ErrConflict
+	}
+	who, nick := p.UserID, p.Name
+	if userID != "" {
+		u, err := s.GetUser(ctx, userID)
+		if err != nil {
+			return err
+		}
+		who, nick = &u.ID, userName(u)
 	}
 	var roundID *string
 	var mapName string
@@ -658,9 +728,9 @@ func (s *Store) CompleteLegendaryInMatch(ctx context.Context, legendaryID, tourn
 		roundID = &rid
 	}
 	if _, err := s.CompleteLegendary(ctx, legendaryID, models.LegendaryCompletion{
-		UserID:        p.UserID,
+		UserID:        who,
 		ParticipantID: &p.ID,
-		Nickname:      p.Name,
+		Nickname:      nick,
 		TournamentID:  &tournamentID,
 		Map:           mapName,
 		RoundID:       roundID,
