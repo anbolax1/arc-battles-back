@@ -95,14 +95,14 @@ func beltNews(b models.Belt, e store.BeltEvent) beltNewsItem {
 		p = append(p, fmt.Sprintf("%s обыграл %s%s и подобрал ничейный пояс лиги.",
 			beltLink(r.Holder), beltLink(beltOpponent(r)), beltScore(r.Score)))
 		if prev != nil && prev.End == "drop" && prev.To != nil {
-			p = append(p, fmt.Sprintf("Пояс был ничей с %s: %s %s подряд не выходил на обычный матч, и пояс выпал.",
+			p = append(p, fmt.Sprintf("Пояс был ничей с %s: %s %s подряд не выходил на регулярный матч, и пояс выпал.",
 				ruDate(*prev.To), html.EscapeString(beltName(prev.Holder)), gameDays))
 		}
 		p = append(p, beltNewcomer(r, html.EscapeString(x)))
 	case "drop":
 		out.title = "Пояс лиги выпал у " + x
 		out.art.Vacant = true
-		p = append(p, fmt.Sprintf("%s %s подряд не выходил на обычный матч, и пояс лиги выпал. Пояс был у него с %s: %s, %s.",
+		p = append(p, fmt.Sprintf("%s %s подряд не выходил на регулярный матч, и пояс лиги выпал. Пояс был у него с %s: %s, %s.",
 			beltLink(r.Holder), gameDays, ruDate(r.From), ruCount(beltDays(r.From, e.At), "день", "дня", "дней"),
 			beltDefenses(len(r.Defenses))))
 		if e.Reign == len(b.Reigns)-1 && b.Holder == nil {
@@ -111,13 +111,13 @@ func beltNews(b models.Belt, e store.BeltEvent) beltNewsItem {
 				for i, l := range b.Leaders {
 					names[i] = beltLink(l)
 				}
-				p = append(p, "Теперь пояс ничей. Его разыграет ближайший обычный матч лидера таблицы сезона: "+strings.Join(names, " или ")+
+				p = append(p, "Теперь пояс ничей. Его разыграет ближайший регулярный матч лидера таблицы сезона: "+strings.Join(names, " или ")+
 					". Выиграет лидер — пояс его, проиграет — пояс у того, кто его обыграл.")
 			} else {
-				p = append(p, "Теперь пояс ничей: его разыграет первый обычный матч сезона.")
+				p = append(p, "Теперь пояс ничей: его разыграет первый регулярный матч сезона.")
 			}
 		}
-		p = append(p, "Игровой день — день, когда в лиге был хотя бы один обычный матч.")
+		p = append(p, "Игровой день — день, когда в лиге был хотя бы один регулярный матч.")
 	case "honor":
 		out.title = x + " — почётный носитель пояса"
 		out.art.Stars = b.HonorAt

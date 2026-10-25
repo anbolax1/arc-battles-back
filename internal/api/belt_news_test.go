@@ -43,8 +43,8 @@ func TestBeltNews(t *testing.T) {
 
 	drop := beltNews(b, store.BeltEvent{Kind: "drop", Reign: 1, At: day(15, 0)})
 	for _, want := range []string{
-		"8 игровых дней подряд не выходил на обычный матч, и пояс лиги выпал. Пояс был у него с 4 октября: 11 дней, ни одной защиты.",
-		`ближайший обычный матч лидера таблицы сезона: <a href="/profile/mol">MOLODOY</a>.`,
+		"8 игровых дней подряд не выходил на регулярный матч, и пояс лиги выпал. Пояс был у него с 4 октября: 11 дней, ни одной защиты.",
+		`ближайший регулярный матч лидера таблицы сезона: <a href="/profile/mol">MOLODOY</a>.`,
 	} {
 		if !strings.Contains(drop.body, want) {
 			t.Errorf("пояс выпал: нет %q в\n%s", want, drop.body)
