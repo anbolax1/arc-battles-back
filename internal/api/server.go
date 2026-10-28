@@ -174,6 +174,7 @@ func (s *Server) Router() http.Handler {
 
 			// Дизайн сайта для всех посетителей: прежний или новый.
 			r.Put("/site/design", s.handleSetSiteDesign)
+			r.Put("/site/subscriber-role", s.handleSetSubscriberRole)
 
 			// Новости лиги: черновики, публикация по дате, картинка.
 			r.Get("/news/all", s.handleListAllNews)
