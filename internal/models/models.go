@@ -556,6 +556,57 @@ type PlayerProfile struct {
 	Analytics map[string]SeasonAnalytics `json:"analytics1x1"` // по картам и соперникам; ключ - сезон, пусто - вне сезонов
 	Teams     []TeamSummary              `json:"teams"`        // команды 2×2, где состоит игрок
 	Patches   map[string]PatchSeason     `json:"patches1x1"`   // нашивки по сезонам; ключ - сезон
+
+	GameHours  *StatValue       `json:"gameHours,omitempty"`  // часов в ARC Raiders - со скриншота
+	GameKnocks *StatValue       `json:"gameKnocks,omitempty"` // ноков в ARC Raiders за всё время - со скриншота
+	Favorites  *PlayerFavorites `json:"favorites,omitempty"`  // только у подписчика и выше, если что-то выбрано
+}
+
+// StatValue - число из профиля в игре: видно сразу, а Confirmed - модератор сверил его со скриншотом.
+type StatValue struct {
+	Value     int  `json:"value"`
+	Confirmed bool `json:"confirmed"`
+}
+
+// StatClaim - число из профиля в игре вместе со скриншотом, который сверяет модератор.
+type StatClaim struct {
+	ID            string     `json:"id"`
+	UserID        string     `json:"userId"`
+	Login         string     `json:"login,omitempty"`
+	DisplayName   string     `json:"displayName,omitempty"`
+	Kind          string     `json:"kind"` // hours | knocks
+	Value         int        `json:"value"`
+	Previous      *int       `json:"previous,omitempty"` // подтверждённое раньше: модератору видно, насколько выросло
+	ScreenshotURL string     `json:"screenshotUrl"`
+	Status        string     `json:"status"` // pending | approved | rejected
+	Reason        string     `json:"reason,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	DecidedAt     *time.Time `json:"decidedAt,omitempty"`
+}
+
+// PlayerFavorites - любимое игрока: тиммейты (до пяти), карта, оружие, усилитель и щит.
+type PlayerFavorites struct {
+	Teammates []TeamMember `json:"teammates"`
+	MapCode   string       `json:"mapCode,omitempty"`
+	Map       string       `json:"map,omitempty"`
+	Weapon    string       `json:"weapon,omitempty"`
+	Augment   string       `json:"augment,omitempty"`
+	Shield    string       `json:"shield,omitempty"`
+}
+
+// FavoriteOptions - из чего выбирать любимое.
+type FavoriteOptions struct {
+	Maps     []MapInfo `json:"maps"`
+	Weapons  []string  `json:"weapons"`
+	Augments []string  `json:"augments"`
+	Shields  []string  `json:"shields"`
+}
+
+// MyExtras - свой профиль: последние заявки с часами и ноками, любимое и можно ли его менять.
+type MyExtras struct {
+	Claims       []StatClaim     `json:"claims"`
+	Favorites    PlayerFavorites `json:"favorites"`
+	CanFavorites bool            `json:"canFavorites"`
 }
 
 // SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам, ноки и задания игрока.

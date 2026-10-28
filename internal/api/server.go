@@ -94,6 +94,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/site", s.handleGetSite)
 		r.Get("/news", s.handleListNews)
 		r.Get("/news/{id}", s.handleGetNews)
+		r.Get("/favorites/options", s.handleFavoriteOptions)
 
 		// --- Authenticated user ---
 		r.Group(func(r chi.Router) {
@@ -105,6 +106,18 @@ func (s *Server) Router() http.Handler {
 			r.Get("/me/registrations", s.handleMyRegistrations)
 			r.Post("/registrations", s.handleRegister)
 			r.Post("/highlights", s.handleCreateHighlight)
+			// Профиль: часы и ноки со скриншотом, любимое (подписчик и выше).
+			r.Get("/me/extras", s.handleMyExtras)
+			r.Post("/me/stat-claims/{kind}", s.handleSubmitStatClaim)
+			r.Put("/me/favorites", s.handleSaveFavorites)
+			r.Get("/player-search", s.handleSearchPlayers)
+		})
+
+		// --- Модератор: проверка скриншотов ---
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireRole(models.RoleModerator))
+			r.Get("/stat-claims", s.handleListStatClaims)
+			r.Post("/stat-claims/{id}/decide", s.handleDecideStatClaim)
 		})
 
 		// --- Superadmin only (организатор) ---

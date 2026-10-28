@@ -267,8 +267,7 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 		ORDER BY ` + orderBy + `
 		LIMIT $1 OFFSET $2`
 	qt := strings.TrimSpace(q)
-	// Экранируем спецсимволы LIKE (\, %, _) — это поиск-подстрока, а не паттерн (escape по умолчанию '\').
-	like := "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(qt) + "%"
+	like := "%" + likeEscape(qt) + "%"
 	rows, err := s.Pool.Query(ctx, query, limit, offset, qt, like)
 	if err != nil {
 		return nil, 0, err
@@ -290,6 +289,11 @@ func (s *Store) ListUsersOverview(ctx context.Context, limit, offset int, q, sor
 		out = append(out, o)
 	}
 	return out, total, rows.Err()
+}
+
+// likeEscape экранирует спецсимволы LIKE (\, %, _): поиск идёт по подстроке, а не по шаблону.
+func likeEscape(q string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
 }
 
 func (s *Store) SetRole(ctx context.Context, userID string, role models.Role) error {

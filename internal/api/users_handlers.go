@@ -177,6 +177,23 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		patches = map[string]models.PatchSeason{}
 	}
+	hours, knocks, err := s.Store.PlayerStatValues(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Любимое - привилегия подписчика: без роли блок не показывается, хотя выбор сохранён.
+	var favorites *models.PlayerFavorites
+	if u.Role.AtLeast(models.RoleSubscriber) {
+		f, filled, err := s.Store.GetFavorites(r.Context(), u.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if filled {
+			favorites = &f
+		}
+	}
 	writeJSON(w, http.StatusOK, models.PlayerProfile{
 		User:        u,
 		MmrSolo:     mmrSolo,
@@ -192,5 +209,8 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		Analytics:   analytics,
 		Teams:       teams,
 		Patches:     patches,
+		GameHours:   hours,
+		GameKnocks:  knocks,
+		Favorites:   favorites,
 	})
 }
