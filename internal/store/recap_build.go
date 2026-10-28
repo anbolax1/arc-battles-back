@@ -72,10 +72,11 @@ type recapRawVeto struct{ action, mapCode string }
 
 type recapHist struct {
 	user       string
-	tournament string // пусто - сверка рейтинга
+	tournament string // пусто - сверка или сброс рейтинга
 	at         time.Time
 	delta      int
 	before     int
+	reset      bool // игрок сбросил рейтинг жетоном
 }
 
 // detailed - у матча есть раунды со счётом, задания или пики-баны; у матчей из таблицы организатора только итог и карта.
@@ -169,21 +170,24 @@ func buildRecap(in recapInput) models.SeasonRecap {
 		}
 	}
 
-	// Рейтинг - по истории MMR: матч или сверка меняют его пакетом, точка кривой - после пакета.
+	// Рейтинг - по истории MMR: матч или сверка меняют его пакетом, точка кривой - после пакета. Сброс
+	// жетоном - у одного игрока, со сверками не смешивается.
 	type step struct {
-		at   time.Time
-		corr bool
-		rows []recapHist
+		at    time.Time
+		corr  bool
+		reset bool
+		rows  []recapHist
 	}
 	var steps []step
 	for _, h := range in.history {
 		key := h.tournament
 		n := len(steps)
-		if n > 0 && ((key != "" && steps[n-1].rows[0].tournament == key) || (key == "" && steps[n-1].corr && steps[n-1].at.Equal(h.at))) {
+		if n > 0 && ((key != "" && steps[n-1].rows[0].tournament == key) ||
+			(key == "" && !h.reset && steps[n-1].corr && !steps[n-1].reset && steps[n-1].at.Equal(h.at))) {
 			steps[n-1].rows = append(steps[n-1].rows, h)
 			continue
 		}
-		steps = append(steps, step{at: h.at, corr: key == "", rows: []recapHist{h}})
+		steps = append(steps, step{at: h.at, corr: key == "", reset: h.reset, rows: []recapHist{h}})
 	}
 	before := map[string]map[string]int{} // матч -> игрок -> MMR до
 	delta := map[string]map[string]int{}
@@ -202,8 +206,11 @@ func buildRecap(in recapInput) models.SeasonRecap {
 			if !a.played {
 				continue
 			}
+			// Третье число точки кривой: 0 - матч, 1 - сверка, 2 - сброс жетоном.
 			c := int64(0)
-			if st.corr {
+			if st.reset {
+				c = 2
+			} else if st.corr {
 				c = 1
 			}
 			a.curve = append(a.curve, [3]int64{st.at.UnixMilli(), int64(a.mmr), c})
@@ -214,7 +221,7 @@ func buildRecap(in recapInput) models.SeasonRecap {
 				a.low = a.mmr
 			}
 		}
-		if st.corr {
+		if st.corr && !st.reset {
 			out.Summary.Corrections = append(out.Summary.Corrections, models.RecapCorrection{At: st.at, Players: len(st.rows)})
 		}
 	}

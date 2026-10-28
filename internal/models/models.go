@@ -179,6 +179,8 @@ type MatchState struct {
 	Patches      []MatchPatch          `json:"patches"`          // нашивки, полученные в этом матче
 	Focus        string                `json:"focus,omitempty"`  // сторона в рейде: её задания и счёт показывает оверлей
 	Chance       *MatchChance          `json:"chance,omitempty"` // шансы на победу; у 2×2 не считаются
+	Doubles      []DoubleToken         `json:"doubles"`          // жетоны ×2 игроков на этот матч
+	DoubleWallet map[string]int        `json:"doubleWallet"`     // сколько жетонов ×2 у каждого игрока сторон
 }
 
 // Chance - шансы сторон A и B на победу, доли от 1, в сумме 1; Draw - шанс равного счёта после всех
@@ -249,6 +251,7 @@ type MatchupSide struct {
 	WinChance     int          `json:"winChance,omitempty"` // шанс на победу перед матчем, проценты
 	WinGain       int          `json:"winGain,omitempty"`   // MMR за победу
 	LossDrop      int          `json:"lossDrop,omitempty"`  // MMR за поражение
+	Double        bool         `json:"double,omitempty"`    // жетон ×2: и победа, и поражение вдвое
 }
 
 // HeadToHead - другие сыгранные матчи тех же сторон друг против друга. Матч ×2 прошлых сезонов
@@ -277,7 +280,8 @@ type MatchPlayer struct {
 	Losses        int    `json:"losses"`
 	IsNew         bool   `json:"isNew"` // в текущем сезоне ещё не играл
 	IsPlaceholder bool   `json:"isPlaceholder"`
-	PrevGames     int    `json:"prevGames"` // матчей в прошлых сезонах: при равном MMR сторона A - у кого меньше
+	PrevGames     int    `json:"prevGames"`          // матчей в прошлых сезонах: при равном MMR сторона A - у кого меньше
+	Priority      bool   `json:"priority,omitempty"` // сегодня играет без очереди
 }
 
 // MatchTeam - команда 2×2 из списка организатора: для выбора стороны матча. MMR и счёт - в текущем сезоне.
@@ -384,6 +388,7 @@ type Registration struct {
 	UserDisplayName string     `json:"userDisplayName,omitempty"`
 	UserAvatarURL   string     `json:"userAvatarUrl,omitempty"`
 	TournamentTitle string     `json:"tournamentTitle,omitempty"`
+	Priority        bool       `json:"priority,omitempty"` // сегодня без очереди: в пуле выше остальных
 }
 
 type LeaderboardRow struct {
@@ -437,6 +442,7 @@ type MmrPoint struct {
 	Games        int        `json:"games"`                // сколько матчей засчитывает (для побед и поражений)
 	Season       string     `json:"season"`               // id сезона; пусто - матч вне сезона
 	Correction   bool       `json:"correction,omitempty"` // не матч, а сверка рейтинга с официальными цифрами
+	Reset        bool       `json:"reset,omitempty"`      // не матч, а сброс рейтинга жетоном
 	Voided       bool       `json:"voided,omitempty"`     // матч не засчитан: сыгран, но в победы и серии не идёт
 }
 
@@ -560,6 +566,7 @@ type PlayerProfile struct {
 	GameHours  *StatValue       `json:"gameHours,omitempty"`  // часов в ARC Raiders - со скриншота
 	GameKnocks *StatValue       `json:"gameKnocks,omitempty"` // ноков в ARC Raiders за всё время - со скриншота
 	Favorites  *PlayerFavorites `json:"favorites,omitempty"`  // только у подписчика и выше, если что-то выбрано
+	Tokens     TokenWallet      `json:"tokens"`
 }
 
 // StatValue - число из профиля в игре: видно сразу, а Confirmed - модератор сверил его со скриншотом.
@@ -602,11 +609,62 @@ type FavoriteOptions struct {
 	Shields  []string  `json:"shields"`
 }
 
+// TokenWallet - жетоны игрока и когда их можно тратить.
+type TokenWallet struct {
+	Double        int        `json:"double"`
+	Priority      int        `json:"priority"`
+	Reset         int        `json:"reset"`
+	PriorityUntil *time.Time `json:"priorityUntil,omitempty"` // жетон «Без очереди» действует до конца игрового дня
+	PriorityNext  *time.Time `json:"priorityNext,omitempty"`  // раньше этого новый «Без очереди» не активировать
+	LastReset     *time.Time `json:"lastReset,omitempty"`     // когда игрок в последний раз сбросил рейтинг
+	ResetUsed     bool       `json:"resetUsed,omitempty"`     // в текущем сезоне рейтинг уже сброшен
+}
+
+// TokenEntry - строка журнала жетонов: выдача (+N) или трата (-1).
+type TokenEntry struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"` // double | priority | reset
+	Delta        int       `json:"delta"`
+	Note         string    `json:"note,omitempty"`
+	TournamentID *string   `json:"tournamentId,omitempty"`
+	Match        string    `json:"match,omitempty"` // название матча, на который потрачен жетон ×2
+	By           string    `json:"by,omitempty"`    // кто выдал или активировал
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// DoubleToken - жетон ×2, активированный игроком на этот матч.
+type DoubleToken struct {
+	ParticipantID string `json:"participantId"`
+	UserID        string `json:"userId"`
+}
+
+// PendingMatch - матч игрока, который ещё не начался: на него можно активировать жетон ×2.
+type PendingMatch struct {
+	TournamentID string     `json:"tournamentId"`
+	Title        string     `json:"title"`
+	Mode         string     `json:"mode"`
+	StartsAt     *time.Time `json:"startsAt,omitempty"`
+	Active       bool       `json:"active"`            // жетон этого игрока уже на матче
+	Blocked      string     `json:"blocked,omitempty"` // почему не активировать: например, у напарника уже стоит
+}
+
+// PlayerModeration - что модератор видит на странице игрока: скриншоты, журнал жетонов и матчи,
+// на которые можно поставить жетон ×2.
+type PlayerModeration struct {
+	Claims  []StatClaim    `json:"claims"`
+	Ledger  []TokenEntry   `json:"ledger"`
+	Matches []PendingMatch `json:"matches"`
+}
+
 // MyExtras - свой профиль: последние заявки с часами и ноками, любимое и можно ли его менять.
 type MyExtras struct {
 	Claims       []StatClaim     `json:"claims"`
 	Favorites    PlayerFavorites `json:"favorites"`
 	CanFavorites bool            `json:"canFavorites"`
+	Tokens       TokenWallet     `json:"tokens"`
+	ResetBlocked string          `json:"resetBlocked,omitempty"` // почему сейчас не сбросить рейтинг
+	Mmr          int             `json:"mmr"`                    // MMR 1×1 в текущем сезоне
+	StartMmr     int             `json:"startMmr"`
 }
 
 // SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам, ноки и задания игрока.

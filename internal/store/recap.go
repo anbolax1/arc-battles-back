@@ -258,7 +258,7 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 	}
 
 	rows, err = s.Pool.Query(ctx, `
-		SELECT user_id, COALESCE(tournament_id, ''), created_at, delta, mmr_before
+		SELECT user_id, COALESCE(tournament_id, ''), created_at, delta, mmr_before, reset
 		FROM mmr_history WHERE season_key = $1 AND mode = '1x1'
 		ORDER BY created_at, tournament_id NULLS LAST, id`, sn.ID)
 	if err != nil {
@@ -266,7 +266,7 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 	}
 	for rows.Next() {
 		var h recapHist
-		if err := rows.Scan(&h.user, &h.tournament, &h.at, &h.delta, &h.before); err != nil {
+		if err := rows.Scan(&h.user, &h.tournament, &h.at, &h.delta, &h.before, &h.reset); err != nil {
 			rows.Close()
 			return in, err
 		}

@@ -186,7 +186,7 @@ func (s *Server) handleSearchPlayers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
-// GET /api/me/extras - свой профиль: заявки с часами и ноками, любимое и можно ли его заполнять.
+// GET /api/me/extras - свой профиль: заявки с часами и ноками, любимое, жетоны и можно ли сбросить рейтинг.
 func (s *Server) handleMyExtras(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
 	ctx := r.Context()
@@ -200,9 +200,29 @@ func (s *Server) handleMyExtras(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, models.MyExtras{
+	wallet, err := s.Store.TokenWallet(ctx, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	mmr, err := s.Store.GetUserMmr(ctx, u.ID, "1x1")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := models.MyExtras{
 		Claims:       claims,
 		Favorites:    fav,
 		CanFavorites: u.Role.AtLeast(models.RoleSubscriber),
-	})
+		Tokens:       wallet,
+		Mmr:          mmr,
+		StartMmr:     s.Store.ActiveSeasonStart(ctx),
+	}
+	if err := s.Store.ResetBlocked(ctx, u.ID); isTokenRule(err) {
+		out.ResetBlocked = err.Error()
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

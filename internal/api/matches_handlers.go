@@ -211,14 +211,13 @@ func (s *Server) handleCreatePlaceholder(w http.ResponseWriter, r *http.Request)
 // в расписание и всегда идёт три раунда.
 func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Mode             string     `json:"mode"`
-		PlayerType       string     `json:"playerType"`
-		RatingMultiplier int        `json:"ratingMultiplier"`
-		Format           string     `json:"format"`
-		Rounds           int        `json:"rounds"`
-		StartsAt         *time.Time `json:"startsAt"`
-		Prize            string     `json:"prize"`
-		Sides            []struct {
+		Mode       string     `json:"mode"`
+		PlayerType string     `json:"playerType"`
+		Format     string     `json:"format"`
+		Rounds     int        `json:"rounds"`
+		StartsAt   *time.Time `json:"startsAt"`
+		Prize      string     `json:"prize"`
+		Sides      []struct {
 			UserID  string `json:"userId"`
 			TeamKey string `json:"teamKey"`
 		} `json:"sides"`
@@ -240,8 +239,7 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := store.NewMatch{
-		Mode: b.Mode, PlayerType: b.PlayerType, RatingMultiplier: b.RatingMultiplier, Format: b.Format, Rounds: b.Rounds, StartsAt: b.StartsAt,
-		Prize: prize,
+		Mode: b.Mode, PlayerType: b.PlayerType, Format: b.Format, Rounds: b.Rounds, StartsAt: b.StartsAt, Prize: prize,
 	}
 	teams := b.Mode == "2x2"
 	for i, sd := range b.Sides {

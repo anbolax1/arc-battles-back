@@ -49,8 +49,13 @@ func (s *Store) Matchup(ctx context.Context, tournamentID string) (models.Matchu
 	for _, c := range t.MmrChanges {
 		before[c.ParticipantID] = c.Before
 	}
+	doubled, err := s.doubledUsers(ctx, tournamentID)
+	if err != nil {
+		return out, err
+	}
 	for _, p := range parts {
 		side := s.matchupSide(ctx, t.Mode, p)
+		side.Double = tokenMult(doubled, participantUsers(p)...) == 2
 		if t.Status == "finished" {
 			side.Mmr = before[p.ID]
 		} else if key := sideKey(t.Mode, p); key != "" {
@@ -81,14 +86,24 @@ func (s *Store) Matchup(ctx context.Context, tournamentID string) (models.Matchu
 			b.WinChance = 100 - a.WinChance
 		}
 		if t.Status != "finished" {
+			// Жетон ×2 удваивает и выигрыш, и проигрыш своей стороны, соперника не трогает.
 			mult := max(t.RatingMultiplier, 1)
-			a.WinGain = eloWinMagnitude(a.Mmr, b.Mmr, mult, t.Games, rule.K)
-			b.WinGain = eloWinMagnitude(b.Mmr, a.Mmr, mult, t.Games, rule.K)
-			a.LossDrop, b.LossDrop = b.WinGain, a.WinGain
+			ta, tb := sideTokenMult(a), sideTokenMult(b)
+			ga := eloWinMagnitude(a.Mmr, b.Mmr, mult, t.Games, rule.K)
+			gb := eloWinMagnitude(b.Mmr, a.Mmr, mult, t.Games, rule.K)
+			a.WinGain, b.LossDrop = ga*ta, ga*tb
+			b.WinGain, a.LossDrop = gb*tb, gb*ta
 		}
 	}
 	out.HeadToHead, err = s.headToHead(ctx, t, parts[0], parts[1])
 	return out, err
+}
+
+func sideTokenMult(side *models.MatchupSide) int {
+	if side.Double {
+		return 2
+	}
+	return 1
 }
 
 // matchupSide - сторона с игроками: у 2×2 оба из состава, у 1×1 один.

@@ -27,16 +27,16 @@ type MatchSide struct {
 	TeamKey string
 }
 
-// NewMatch - параметры нового матча.
+// NewMatch - параметры нового матча. Общего ×2 у матча больше нет: удвоение - жетон игрока,
+// вместе они дали бы ×4.
 type NewMatch struct {
-	Mode             string
-	PlayerType       string
-	RatingMultiplier int
-	Format           string     // match | show
-	Rounds           int        // обычный матч - 2 или 3 раунда, у шоу-матча всегда 3
-	StartsAt         *time.Time // когда начнётся шоу-матч
-	Prize            string     // приз шоу-матча
-	Sides            [2]MatchSide
+	Mode       string
+	PlayerType string
+	Format     string     // match | show
+	Rounds     int        // обычный матч - 2 или 3 раунда, у шоу-матча всегда 3
+	StartsAt   *time.Time // когда начнётся шоу-матч
+	Prize      string     // приз шоу-матча
+	Sides      [2]MatchSide
 }
 
 type sideInfo struct {
@@ -134,9 +134,6 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 	if in.Mode != "2x2" {
 		in.Mode = "1x1"
 	}
-	if in.RatingMultiplier != 2 {
-		in.RatingMultiplier = 1
-	}
 	rounds := MatchRounds(in.Format, in.Rounds)
 	rule := s.activeSeasonRule(ctx)
 	a, err := s.describeSide(ctx, in.Mode, in.Sides[0], rule)
@@ -162,11 +159,11 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 
 	var id string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, rating_multiplier, season_id, format, prize)
-		VALUES ($1, $2, $3, $4, $5, '[]', $6, $7, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1), $8, $9)
+		INSERT INTO tournaments (title, mode, player_type, status, total_rounds, maps, starts_at, season_id, format, prize)
+		VALUES ($1, $2, $3, $4, $5, '[]', $6, (SELECT id FROM seasons WHERE status = 'active' LIMIT 1), $7, $8)
 		RETURNING id`,
 		a.part.Name+" vs "+b.part.Name, in.Mode, NormalizePlayerType(in.PlayerType), status, rounds, startsAt,
-		in.RatingMultiplier, in.Format, in.Prize).Scan(&id); err != nil {
+		in.Format, in.Prize).Scan(&id); err != nil {
 		return models.Tournament{}, err
 	}
 	for n := 1; n <= rounds; n++ {
@@ -669,9 +666,11 @@ func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, err
 		)
 		SELECT u.id, u.login, u.display_name, ($2::int + COALESCE(h.total, 0))::int,
 		       COALESCE(h.wins, 0)::int, COALESCE(h.losses, 0)::int,
-		       h.user_id IS NULL, u.password_hash LIKE '!%', COALESCE(prev.games, 0)::int
+		       h.user_id IS NULL, u.password_hash LIKE '!%', COALESCE(prev.games, 0)::int,
+		       EXISTS (SELECT 1 FROM token_ledger l WHERE l.user_id = u.id AND l.kind = 'priority'
+		               AND l.action = 'use' AND l.created_at >= $3)
 		FROM users u LEFT JOIN h ON h.user_id = u.id LEFT JOIN prev ON prev.user_id = u.id
-		ORDER BY h.user_id IS NULL, ($2::int + COALESCE(h.total, 0)) DESC, lower(u.login)`, rule.Key, rule.Start)
+		ORDER BY h.user_id IS NULL, ($2::int + COALESCE(h.total, 0)) DESC, lower(u.login)`, rule.Key, rule.Start, mskDay(time.Now()))
 	if err != nil {
 		return nil, err
 	}
@@ -679,7 +678,7 @@ func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, err
 	out := []models.MatchPlayer{}
 	for rows.Next() {
 		var p models.MatchPlayer
-		if err := rows.Scan(&p.ID, &p.Login, &p.DisplayName, &p.Mmr, &p.Wins, &p.Losses, &p.IsNew, &p.IsPlaceholder, &p.PrevGames); err != nil {
+		if err := rows.Scan(&p.ID, &p.Login, &p.DisplayName, &p.Mmr, &p.Wins, &p.Losses, &p.IsNew, &p.IsPlaceholder, &p.PrevGames, &p.Priority); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

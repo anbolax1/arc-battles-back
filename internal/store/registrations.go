@@ -2,9 +2,15 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
 )
+
+// priorityToday - игрок сегодня активировал «Без очереди»: его заявка в пуле выше остальных до конца
+// игрового дня. $1 - начало сегодняшнего дня по Москве.
+const priorityToday = `EXISTS (SELECT 1 FROM token_ledger l WHERE l.user_id = r.user_id AND l.kind = 'priority'
+	AND l.action = 'use' AND l.created_at >= $1)`
 
 // CreateRegistration создаёт/обновляет заявку игрока в общий пул (одна на пользователя).
 // Повторная подача обновляет embark/note и возвращает заявку в пул (status=pending).
@@ -67,16 +73,16 @@ func (s *Store) ListMyRegistrations(ctx context.Context, userID string) ([]model
 	return out, rows.Err()
 }
 
-// ListPool — открытые заявки (ещё не распределённые), кто подал раньше — выше.
+// ListPool - открытые заявки (ещё не распределённые): сначала «Без очереди», дальше кто подал раньше.
 func (s *Store) ListPool(ctx context.Context) ([]models.Registration, error) {
 	const q = `
 		SELECT r.id, r.tournament_id, r.user_id, r.embark_id, r.status, r.note, r.created_at, r.decided_at,
-		       u.login, u.display_name, u.avatar_url
+		       u.login, u.display_name, u.avatar_url, ` + priorityToday + ` AS priority
 		FROM registrations r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.status = 'pending'
-		ORDER BY r.created_at ASC`
-	rows, err := s.Pool.Query(ctx, q)
+		ORDER BY priority DESC, r.created_at ASC`
+	rows, err := s.Pool.Query(ctx, q, mskDay(time.Now()))
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +92,7 @@ func (s *Store) ListPool(ctx context.Context) ([]models.Registration, error) {
 	for rows.Next() {
 		var r models.Registration
 		if err := rows.Scan(&r.ID, &r.TournamentID, &r.UserID, &r.EmbarkID, &r.Status, &r.Note,
-			&r.CreatedAt, &r.DecidedAt, &r.UserLogin, &r.UserDisplayName, &r.UserAvatarURL); err != nil {
+			&r.CreatedAt, &r.DecidedAt, &r.UserLogin, &r.UserDisplayName, &r.UserAvatarURL, &r.Priority); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -105,14 +111,14 @@ func (s *Store) ListPoolPage(ctx context.Context, limit, offset int) ([]models.R
 	}
 	const q = `
 		SELECT r.id, r.tournament_id, r.user_id, r.embark_id, r.status, r.note, r.created_at, r.decided_at,
-		       u.login, u.display_name, u.avatar_url,
+		       u.login, u.display_name, u.avatar_url, ` + priorityToday + ` AS priority,
 		       COUNT(*) OVER() AS total
 		FROM registrations r
 		JOIN users u ON u.id = r.user_id
 		WHERE r.status = 'pending'
-		ORDER BY r.created_at ASC
-		LIMIT $1 OFFSET $2`
-	rows, err := s.Pool.Query(ctx, q, limit, offset)
+		ORDER BY priority DESC, r.created_at ASC
+		LIMIT $2 OFFSET $3`
+	rows, err := s.Pool.Query(ctx, q, mskDay(time.Now()), limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -123,7 +129,7 @@ func (s *Store) ListPoolPage(ctx context.Context, limit, offset int) ([]models.R
 	for rows.Next() {
 		var r models.Registration
 		if err := rows.Scan(&r.ID, &r.TournamentID, &r.UserID, &r.EmbarkID, &r.Status, &r.Note,
-			&r.CreatedAt, &r.DecidedAt, &r.UserLogin, &r.UserDisplayName, &r.UserAvatarURL, &total); err != nil {
+			&r.CreatedAt, &r.DecidedAt, &r.UserLogin, &r.UserDisplayName, &r.UserAvatarURL, &r.Priority, &total); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)

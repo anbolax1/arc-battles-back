@@ -106,18 +106,24 @@ func (s *Server) Router() http.Handler {
 			r.Get("/me/registrations", s.handleMyRegistrations)
 			r.Post("/registrations", s.handleRegister)
 			r.Post("/highlights", s.handleCreateHighlight)
-			// Профиль: часы и ноки со скриншотом, любимое (подписчик и выше).
+			// Профиль: часы и ноки со скриншотом, любимое (подписчик и выше), сброс рейтинга жетоном.
 			r.Get("/me/extras", s.handleMyExtras)
 			r.Post("/me/stat-claims/{kind}", s.handleSubmitStatClaim)
 			r.Put("/me/favorites", s.handleSaveFavorites)
+			r.Post("/me/reset", s.handleResetRating)
 			r.Get("/player-search", s.handleSearchPlayers)
 		})
 
-		// --- Модератор: проверка скриншотов ---
+		// --- Модератор: проверка скриншотов и жетоны игроков ---
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireRole(models.RoleModerator))
 			r.Get("/stat-claims", s.handleListStatClaims)
 			r.Post("/stat-claims/{id}/decide", s.handleDecideStatClaim)
+			r.Get("/users/{id}/moderation", s.handlePlayerModeration)
+			r.Post("/users/{id}/tokens", s.handleGrantTokens)
+			r.Post("/users/{id}/tokens/priority", s.handleActivatePriority)
+			r.Delete("/users/{id}/tokens/priority", s.handleCancelPriority)
+			r.Post("/tournaments/{id}/double", s.handleMatchDouble)
 		})
 
 		// --- Superadmin only (организатор) ---

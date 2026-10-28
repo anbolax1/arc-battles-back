@@ -182,6 +182,11 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	wallet, err := s.Store.TokenWallet(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	// Любимое - привилегия подписчика: без роли блок не показывается, хотя выбор сохранён.
 	var favorites *models.PlayerFavorites
 	if u.Role.AtLeast(models.RoleSubscriber) {
@@ -212,5 +217,6 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		GameHours:   hours,
 		GameKnocks:  knocks,
 		Favorites:   favorites,
+		Tokens:      wallet,
 	})
 }
