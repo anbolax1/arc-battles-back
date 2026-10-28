@@ -147,7 +147,7 @@ func (s *Store) PlayerHistory(ctx context.Context, userID string) ([]models.Play
 }
 
 // PlayerAggregate — расширенная статистика игрока по завершённым турнирам:
-// источники очков (суммы разбивки по всем участиям) + любимая карта.
+// источники очков (суммы разбивки по всем участиям) + любимая и лучшая карта.
 // Винрейт по режимам и серия считаются в хендлере из истории. Если игрок ещё
 // не сыграл ни одного завершённого турнира — возвращает нулевую статистику.
 func (s *Store) PlayerAggregate(ctx context.Context, userID string) (models.PlayerStats, error) {
@@ -200,6 +200,24 @@ func (s *Store) PlayerAggregate(ctx context.Context, userID string) (models.Play
 		GROUP BY r.map
 		ORDER BY COUNT(*) DESC, r.map
 		LIMIT 1`, pids).Scan(&st.FavoriteMap, &st.FavoriteMapRounds)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return st, err
+	}
+
+	// При равных победах выше карта с меньшим числом поражений; незасчитанный матч - ни победа, ни поражение.
+	err = s.Pool.QueryRow(ctx, `
+		SELECT `+mapStatName+` AS mp,
+		       COALESCE(SUM(t.games) FILTER (WHERE t.winner_participant_id = p.id), 0)::int AS wins
+		FROM participants p
+		JOIN tournaments t ON t.id = p.tournament_id AND NOT t.voided
+		`+matchMapsJoin+`
+		WHERE p.id = ANY($1) AND COALESCE(mm.map, '') <> ''
+		GROUP BY `+mapStatKey+`
+		HAVING SUM(t.games) FILTER (WHERE t.winner_participant_id = p.id) > 0
+		ORDER BY wins DESC,
+		         COALESCE(SUM(t.games) FILTER (WHERE t.winner_participant_id IS NOT NULL AND t.winner_participant_id <> p.id), 0),
+		         mp
+		LIMIT 1`, pids).Scan(&st.BestMap, &st.BestMapWins)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return st, err
 	}

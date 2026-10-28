@@ -541,6 +541,10 @@ type PlayerStats struct {
 	FavoriteMap       string `json:"favoriteMap"`
 	FavoriteMapRounds int    `json:"favoriteMapRounds"`
 
+	// Лучшая карта - где у игрока больше всего побед: матч засчитан на каждую сыгранную в нём карту.
+	BestMap     string `json:"bestMap"`
+	BestMapWins int    `json:"bestMapWins"`
+
 	// Первый сыгранный матч любого формата: у mmr1x1.firstMatch - только 1×1.
 	FirstMatch *time.Time `json:"firstMatch,omitempty"`
 }
