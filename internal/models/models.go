@@ -588,7 +588,7 @@ type StatClaim struct {
 	DisplayName   string     `json:"displayName,omitempty"`
 	Kind          string     `json:"kind"` // hours | knocks | server
 	Value         int        `json:"value"`
-	Region        string     `json:"region,omitempty"` // код региона, только у kind = server
+	Region        string     `json:"region,omitempty"`   // код региона, только у kind = server
 	Previous      *int       `json:"previous,omitempty"` // подтверждённое раньше: модератору видно, насколько выросло
 	ScreenshotURL string     `json:"screenshotUrl"`
 	Status        string     `json:"status"` // pending | approved | rejected
