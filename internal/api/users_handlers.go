@@ -182,6 +182,11 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	server, err := s.Store.PlayerRegion(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	wallet, err := s.Store.TokenWallet(r.Context(), u.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -216,6 +221,7 @@ func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 		Patches:     patches,
 		GameHours:   hours,
 		GameKnocks:  knocks,
+		Server:      server,
 		Favorites:   favorites,
 		Tokens:      wallet,
 	})

@@ -22,20 +22,33 @@ const maxClaimReason = 160
 // maxPlayerSearch - сколько игроков показывать в подсказке при выборе тиммейтов.
 const maxPlayerSearch = 10
 
-// POST /api/me/stat-claims/{kind}?value=N - часы в игре или ноки за всё время: в теле скриншот из игры.
-// Число сразу видно в профиле с пометкой «не подтверждено», пока модератор не сверит его.
+// POST /api/me/stat-claims/{kind}?value=N - часы на поверхности, ноки за всё время или сервер: в теле скриншот из игры.
+// Число сразу видно в профиле с пометкой «не подтверждено», пока модератор не сверит его; сервер меняется
+// только после подтверждения (в value - код региона).
 func (s *Server) handleSubmitStatClaim(w http.ResponseWriter, r *http.Request) {
 	u, _ := userFrom(r.Context())
 	kind := chi.URLParam(r, "kind")
-	limit, ok := store.StatLimits[kind]
-	if !ok {
-		writeError(w, http.StatusNotFound, "такого показателя нет")
-		return
-	}
-	value, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("value")))
-	if err != nil || value < 0 || value > limit {
-		writeError(w, http.StatusBadRequest, "нужно целое число от 0 до "+strconv.Itoa(limit))
-		return
+	raw := strings.TrimSpace(r.URL.Query().Get("value"))
+	var value int
+	var region string
+	if kind == store.StatServer {
+		if !store.ValidRegion(raw) {
+			writeError(w, http.StatusBadRequest, "такого сервера нет в списке")
+			return
+		}
+		region = raw
+	} else {
+		limit, ok := store.StatLimits[kind]
+		if !ok {
+			writeError(w, http.StatusNotFound, "такого показателя нет")
+			return
+		}
+		var err error
+		value, err = strconv.Atoi(raw)
+		if err != nil || value < 0 || value > limit {
+			writeError(w, http.StatusBadRequest, "нужно целое число от 0 до "+strconv.Itoa(limit))
+			return
+		}
 	}
 	tok, err := randomToken()
 	if err != nil {
@@ -47,7 +60,7 @@ func (s *Server) handleSubmitStatClaim(w http.ResponseWriter, r *http.Request) {
 		writePreviewError(w, err)
 		return
 	}
-	c, old, err := s.Store.SubmitStatClaim(r.Context(), u.ID, kind, value, rel)
+	c, old, err := s.Store.SubmitStatClaim(r.Context(), u.ID, kind, value, region, rel)
 	if err != nil {
 		s.Media.Remove(rel)
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -210,8 +223,14 @@ func (s *Server) handleMyExtras(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	server, err := s.Store.PlayerRegion(ctx, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	out := models.MyExtras{
 		Claims:       claims,
+		Server:       server,
 		Favorites:    fav,
 		CanFavorites: u.Role.AtLeast(models.RoleSubscriber),
 		Tokens:       wallet,

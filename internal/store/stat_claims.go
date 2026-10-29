@@ -13,7 +13,24 @@ import (
 const (
 	StatHours  = "hours"  // часов в игре
 	StatKnocks = "knocks" // ноков за всё время
+	StatServer = "server" // игровой регион: число не нужно, в заявке код региона
 )
+
+// DefaultRegion - сервер, пока игрок не подтвердил другой.
+const DefaultRegion = "eu"
+
+// Regions - игровые регионы, которые можно выбрать в профиле (коды; подписи на сайте).
+var Regions = []string{DefaultRegion, "na", "asia", "sa", "oceania"}
+
+// ValidRegion - есть ли такой регион в списке.
+func ValidRegion(code string) bool {
+	for _, r := range Regions {
+		if r == code {
+			return true
+		}
+	}
+	return false
+}
 
 // StatLimits - больше этого в профиле игры не бывает: такое число - опечатка.
 var StatLimits = map[string]int{
@@ -21,7 +38,7 @@ var StatLimits = map[string]int{
 	StatKnocks: 1000000,
 }
 
-const statClaimCols = `c.id, c.user_id, u.login, u.display_name, c.kind, c.value, c.screenshot, c.status, c.reason,
+const statClaimCols = `c.id, c.user_id, u.login, u.display_name, c.kind, c.value, c.region, c.screenshot, c.status, c.reason,
 	c.created_at, c.decided_at,
 	(SELECT p.value FROM stat_claims p WHERE p.user_id = c.user_id AND p.kind = c.kind AND p.status = 'approved'
 	   AND p.created_at < c.created_at ORDER BY p.created_at DESC LIMIT 1)`
@@ -29,7 +46,7 @@ const statClaimCols = `c.id, c.user_id, u.login, u.display_name, c.kind, c.value
 func scanStatClaim(row pgx.Row) (models.StatClaim, error) {
 	var c models.StatClaim
 	var shot string
-	err := row.Scan(&c.ID, &c.UserID, &c.Login, &c.DisplayName, &c.Kind, &c.Value, &shot, &c.Status, &c.Reason,
+	err := row.Scan(&c.ID, &c.UserID, &c.Login, &c.DisplayName, &c.Kind, &c.Value, &c.Region, &shot, &c.Status, &c.Reason,
 		&c.CreatedAt, &c.DecidedAt, &c.Previous)
 	c.ScreenshotURL = "/media/" + shot
 	return c, err
@@ -37,7 +54,8 @@ func scanStatClaim(row pgx.Row) (models.StatClaim, error) {
 
 // SubmitStatClaim записывает новое число со скриншотом. Прежняя непроверенная заявка того же вида
 // заменяется: модератору незачем сверять устаревшее. Отдаёт файл заменённого скриншота - его удалить.
-func (s *Store) SubmitStatClaim(ctx context.Context, userID, kind string, value int, screenshot string) (models.StatClaim, string, error) {
+// Для сервера число не нужно (0), а region - код выбранного региона.
+func (s *Store) SubmitStatClaim(ctx context.Context, userID, kind string, value int, region, screenshot string) (models.StatClaim, string, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return models.StatClaim{}, "", err
@@ -52,8 +70,8 @@ func (s *Store) SubmitStatClaim(ctx context.Context, userID, kind string, value 
 	}
 	var id string
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO stat_claims (user_id, kind, value, screenshot) VALUES ($1, $2, $3, $4) RETURNING id`,
-		userID, kind, value, screenshot).Scan(&id); err != nil {
+		INSERT INTO stat_claims (user_id, kind, value, region, screenshot) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		userID, kind, value, region, screenshot).Scan(&id); err != nil {
 		return models.StatClaim{}, "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -96,6 +114,18 @@ func (s *Store) PlayerStatValues(ctx context.Context, userID string) (hours, kno
 		}
 	}
 	return hours, knocks, rows.Err()
+}
+
+// PlayerRegion - подтверждённый сервер игрока; пока модератор не подтвердил другой, это Европа.
+func (s *Store) PlayerRegion(ctx context.Context, userID string) (string, error) {
+	var region string
+	err := s.Pool.QueryRow(ctx, `
+		SELECT region FROM stat_claims WHERE user_id = $1 AND kind = $2 AND status = 'approved'
+		ORDER BY created_at DESC LIMIT 1`, userID, StatServer).Scan(&region)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DefaultRegion, nil
+	}
+	return region, err
 }
 
 // MyStatClaims - последняя заявка игрока каждого вида: в своём профиле он видит, проверена ли она.

@@ -569,6 +569,7 @@ type PlayerProfile struct {
 
 	GameHours  *StatValue       `json:"gameHours,omitempty"`  // часов в ARC Raiders - со скриншота
 	GameKnocks *StatValue       `json:"gameKnocks,omitempty"` // ноков в ARC Raiders за всё время - со скриншота
+	Server     string           `json:"server"`               // код подтверждённого сервера; по умолчанию Европа
 	Favorites  *PlayerFavorites `json:"favorites,omitempty"`  // только у подписчика и выше, если что-то выбрано
 	Tokens     TokenWallet      `json:"tokens"`
 }
@@ -585,8 +586,9 @@ type StatClaim struct {
 	UserID        string     `json:"userId"`
 	Login         string     `json:"login,omitempty"`
 	DisplayName   string     `json:"displayName,omitempty"`
-	Kind          string     `json:"kind"` // hours | knocks
+	Kind          string     `json:"kind"` // hours | knocks | server
 	Value         int        `json:"value"`
+	Region        string     `json:"region,omitempty"` // код региона, только у kind = server
 	Previous      *int       `json:"previous,omitempty"` // подтверждённое раньше: модератору видно, насколько выросло
 	ScreenshotURL string     `json:"screenshotUrl"`
 	Status        string     `json:"status"` // pending | approved | rejected
@@ -665,6 +667,7 @@ type MyExtras struct {
 	Claims       []StatClaim     `json:"claims"`
 	Favorites    PlayerFavorites `json:"favorites"`
 	CanFavorites bool            `json:"canFavorites"`
+	Server       string          `json:"server"` // подтверждённый сервер: заявка на другой ждёт модератора
 	Tokens       TokenWallet     `json:"tokens"`
 	ResetBlocked string          `json:"resetBlocked,omitempty"` // почему сейчас не сбросить рейтинг
 	Mmr          int             `json:"mmr"`                    // MMR 1×1 в текущем сезоне
