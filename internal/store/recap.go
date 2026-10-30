@@ -79,8 +79,12 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 	const seasonMatches = `t.season_id = $1 AND t.status = 'finished' AND t.mode = '1x1'`
 
 	// Матчи и стороны: A - первый посев, B - второй. У незасчитанного матча победителя для итогов нет.
+	// Матч ×2 - и общий «Рейтинг ×2», и жетон ×2 хотя бы одного игрока.
 	rows, err := s.Pool.Query(ctx, `
-		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.format = 'show', t.voided, t.rating_multiplier, t.games,
+		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.format = 'show', t.voided,
+		       GREATEST(t.rating_multiplier, CASE WHEN EXISTS (
+		           SELECT 1 FROM token_ledger tl WHERE tl.tournament_id = t.id AND tl.kind = 'double') THEN 2 ELSE 1 END),
+		       t.games,
 		       CASE WHEN t.voided THEN '' ELSE COALESCE(t.winner_participant_id, '') END,
 		       p.id, COALESCE(p.user_id, ''), p.total_points
 		FROM tournaments t JOIN participants p ON p.tournament_id = t.id

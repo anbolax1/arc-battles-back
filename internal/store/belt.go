@@ -349,7 +349,10 @@ func (s *Store) loadBeltInput(ctx context.Context) (beltInput, map[string]models
 	in := beltInput{}
 	names := map[string]models.BeltPlayer{}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.season_id, t.format = 'show', t.rating_multiplier, t.games,
+		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.season_id, t.format = 'show',
+		       GREATEST(t.rating_multiplier, CASE WHEN EXISTS (
+		           SELECT 1 FROM token_ledger tl WHERE tl.tournament_id = t.id AND tl.kind = 'double') THEN 2 ELSE 1 END),
+		       t.games,
 		       CASE WHEN t.voided THEN '' ELSE COALESCE(t.winner_participant_id, '') END, p.id, COALESCE(p.user_id, ''), p.total_points,
 		       COALESCE(u.login, ''), COALESCE(NULLIF(u.display_name, ''), u.login, p.name)
 		FROM tournaments t
