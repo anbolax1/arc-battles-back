@@ -42,6 +42,65 @@ func (s *Store) CreateUser(ctx context.Context, login, displayName, passwordHash
 	return u, nil
 }
 
+var (
+	// ErrNickTaken - ник уже носит или использует как логин другой игрок.
+	ErrNickTaken = errors.New("ник уже занят")
+	// ErrEmbarkTaken - Embark ID уже привязан к другому профилю.
+	ErrEmbarkTaken = errors.New("embark id уже занят")
+)
+
+// CreateRegisteredUser заводит аккаунт из формы регистрации. Логин и ник не должны совпадать
+// ни с чьим логином или ником, а Embark ID - с чужим: иначе у игрока, который уже играл
+// (его профиль заведён организатором), появился бы двойник.
+func (s *Store) CreateRegisteredUser(ctx context.Context, login, nick, embark, passwordHash string) (models.User, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return models.User{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Регистрации идут по одной, чтобы проверка и вставка не разошлись при гонке.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('register'))`); err != nil {
+		return models.User{}, err
+	}
+	const nameTaken = `SELECT EXISTS (SELECT 1 FROM users WHERE lower(login) = lower($1) OR lower(display_name) = lower($1))`
+	var taken bool
+	if err := tx.QueryRow(ctx, nameTaken, login).Scan(&taken); err != nil {
+		return models.User{}, err
+	}
+	if taken {
+		return models.User{}, ErrLoginTaken
+	}
+	if err := tx.QueryRow(ctx, nameTaken, nick).Scan(&taken); err != nil {
+		return models.User{}, err
+	}
+	if taken {
+		return models.User{}, ErrNickTaken
+	}
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM users WHERE embark_id <> '' AND lower(embark_id) = lower($1))`, embark).Scan(&taken); err != nil {
+		return models.User{}, err
+	}
+	if taken {
+		return models.User{}, ErrEmbarkTaken
+	}
+
+	u, err := scanUser(tx.QueryRow(ctx,
+		`INSERT INTO users (login, display_name, password_hash, role, embark_id) VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols,
+		login, nick, passwordHash, string(models.DefaultRole), embark))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return models.User{}, ErrLoginTaken
+		}
+		return models.User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return models.User{}, err
+	}
+	return u, nil
+}
+
 // GetUserAuthByLogin возвращает идентификатор, роль и хеш пароля по логину (без учёта
 // регистра) — для проверки пароля при входе. ErrNotFound, если пользователя нет.
 func (s *Store) GetUserAuthByLogin(ctx context.Context, login string) (id string, role models.Role, passwordHash string, err error) {
