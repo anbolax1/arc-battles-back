@@ -98,7 +98,16 @@ func (e *queueEnv) finishMatch(sid string) {
 	}
 }
 
+// user - игрок с подтверждёнными часами и ноками: такому можно записаться в очередь.
 func (e *queueEnv) user(tag string) models.User {
+	e.t.Helper()
+	u := e.userNoStats(tag)
+	e.claim(u, "hours", 150, "approved")
+	e.claim(u, "knocks", 4000, "approved")
+	return u
+}
+
+func (e *queueEnv) userNoStats(tag string) models.User {
 	e.t.Helper()
 	login := fmt.Sprintf("q%d_%s", e.uniq%1_000_000_000, tag)
 	u, err := e.st.CreateUser(e.ctx, login, "Ник "+tag, "x", models.RoleUser)
@@ -106,6 +115,16 @@ func (e *queueEnv) user(tag string) models.User {
 		e.t.Fatalf("CreateUser(%s): %v", tag, err)
 	}
 	return u
+}
+
+// claim записывает заявку на часы или ноки с нужным статусом.
+func (e *queueEnv) claim(u models.User, kind string, value int, status string) {
+	e.t.Helper()
+	if _, err := e.pool.Exec(e.ctx, `
+		INSERT INTO stat_claims (user_id, kind, value, screenshot, status) VALUES ($1, $2, $3, 'x.png', $4)`,
+		u.ID, kind, value, status); err != nil {
+		e.t.Fatal(err)
+	}
 }
 
 func (e *queueEnv) session(format string) string {

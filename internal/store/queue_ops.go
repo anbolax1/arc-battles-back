@@ -131,7 +131,8 @@ type qEntry struct {
 	ID        string
 	Status    string
 	Position  int
-	Performed int
+	Performed int // выступлений в этой сессии: для показа
+	Today     int // матчей игрока за сегодня: по ним встаёт порядок
 	Skipped   int
 	TeamKey   string
 	Label     string
@@ -156,10 +157,44 @@ func (q *qtx) load() ([]queueItem, map[string]*qEntry, error) {
 		if err := rows.Scan(&e.ID, &e.Status, &e.Position, &e.Performed, &e.Skipped, &e.TeamKey, &e.Label); err != nil {
 			return nil, nil, err
 		}
-		items = append(items, queueItem{ID: e.ID, Status: e.Status, Performed: e.Performed})
+		items = append(items, queueItem{ID: e.ID, Status: e.Status})
 		byID[e.ID] = e
 	}
-	return items, byID, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	rows.Close() // дальше запросы на той же транзакции
+
+	// Порядок строится по матчам игроков за сегодня: кто сегодня уже играл, стоит позади тех, кто нет.
+	mrows, err := q.tx.Query(q.ctx, `SELECT entry_id, user_id FROM queue_entry_members WHERE session_id = $1 AND active`, q.sess.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer mrows.Close()
+	byEntry := map[string][]string{}
+	var all []string
+	for mrows.Next() {
+		var entry, user string
+		if err := mrows.Scan(&entry, &user); err != nil {
+			return nil, nil, err
+		}
+		byEntry[entry] = append(byEntry[entry], user)
+		all = append(all, user)
+	}
+	if err := mrows.Err(); err != nil {
+		return nil, nil, err
+	}
+	mrows.Close()
+	today, err := queueTodayMatches(q.ctx, q.tx, all)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range items {
+		e := byID[items[i].ID]
+		e.Today = maxToday(today, byEntry[e.ID])
+		items[i].Today = e.Today
+	}
+	return items, byID, nil
 }
 
 // writeOrder записывает новый порядок: позиции 1..N без пропусков. Уникальность позиций проверяется
@@ -545,6 +580,17 @@ func (s *Store) JoinQueue(ctx context.Context, sessionID, actor string, in Queue
 			return err
 		}
 
+		// Сам игрок записывается только с подтверждёнными часами и ноками; организатор может добавить и без них.
+		if !in.ByOrganizer {
+			msg, err := queueStatsBlock(q.ctx, q.tx, in.UserID, members)
+			if err != nil {
+				return err
+			}
+			if msg != "" {
+				return qState(msg)
+			}
+		}
+
 		var by *string
 		if in.ByOrganizer && actor != "" {
 			by = &actor
@@ -575,7 +621,11 @@ func (s *Store) JoinQueue(ctx context.Context, sessionID, actor string, in Queue
 				return err
 			}
 		}
-		items = qPlaceNew(items, queueItem{ID: entryID, Status: QEntryWaiting, Performed: performed})
+		todayMatches, err := queueTodayMatches(q.ctx, q.tx, members)
+		if err != nil {
+			return err
+		}
+		items = qPlaceNew(items, queueItem{ID: entryID, Status: QEntryWaiting, Today: maxToday(todayMatches, members)})
 		if err := q.writeOrder(items); err != nil {
 			return err
 		}

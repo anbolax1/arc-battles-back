@@ -94,6 +94,12 @@ func (a *queueAPI) actor(tag string, role models.Role) actor {
 	if err != nil {
 		a.t.Fatal(err)
 	}
+	// Часы и ноки подтверждены: без них в очередь не записаться.
+	if _, err := a.st.Pool.Exec(context.Background(), `
+		INSERT INTO stat_claims (user_id, kind, value, screenshot, status)
+		VALUES ($1, 'hours', 150, 'x.png', 'approved'), ($1, 'knocks', 4000, 'x.png', 'approved')`, u.ID); err != nil {
+		a.t.Fatal(err)
+	}
 	tok, err := auth.IssueToken(a.secret, u.ID, string(role), time.Hour)
 	if err != nil {
 		a.t.Fatal(err)

@@ -25,7 +25,10 @@ type QueueMember struct {
 	Login       string     `json:"login"`
 	DisplayName string     `json:"displayName"`
 	AvatarURL   string     `json:"avatarUrl"`
-	Ready       bool       `json:"ready"` // подтвердил готовность на вызов
+	Hours       *int       `json:"hours,omitempty"`  // подтверждённые часы в игре
+	Knocks      *int       `json:"knocks,omitempty"` // подтверждённые ноки за всё время
+	Today       int        `json:"todayMatches"`     // матчей, сыгранных сегодня
+	Ready       bool       `json:"ready"`            // подтвердил готовность на вызов
 	ReadyAt     *time.Time `json:"readyAt,omitempty"`
 }
 
@@ -40,6 +43,7 @@ type QueueEntry struct {
 	Members          []QueueMember `json:"members"`
 	Mmr              int           `json:"mmr"`
 	JoinedAt         time.Time     `json:"joinedAt"`
+	TodayMatches     int           `json:"todayMatches"` // у команды - у самого игравшего из двух
 	PerformedCount   int           `json:"performedCount"`
 	SkippedCount     int           `json:"skippedCount"`
 	InvitedAt        *time.Time    `json:"invitedAt,omitempty"`
@@ -105,6 +109,7 @@ type QueueMe struct {
 	Status       string            `json:"status,omitempty"`       // статус его записи
 	NeedsConfirm bool              `json:"needsConfirm,omitempty"` // его вызвали, а он ещё не подтвердил
 	Confirmed    bool              `json:"confirmed,omitempty"`    // он подтвердил, ждём напарника
+	NeedsStats   bool              `json:"needsStats,omitempty"`   // у него нет подтверждённых часов и ноков
 	CanLeave     bool              `json:"canLeave"`
 	CanJoin      bool              `json:"canJoin"`
 	JoinBlocked  string            `json:"joinBlocked,omitempty"` // почему записаться нельзя

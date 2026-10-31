@@ -6,12 +6,12 @@ import (
 )
 
 func qi(id, status string, performed int) queueItem {
-	return queueItem{ID: id, Status: status, Performed: performed}
+	return queueItem{ID: id, Status: status, Today: performed}
 }
 
 func ids(items []queueItem) []string { return qIDs(items) }
 
-func TestQueuePlaceNewGoesBeforePerformed(t *testing.T) {
+func TestQueuePlaceNewGoesBeforeToday(t *testing.T) {
 	// a, b ещё не выступали; c и d уже выступали и стоят в конце.
 	items := []queueItem{qi("a", QEntryWaiting, 0), qi("b", QEntryWaiting, 0), qi("c", QEntryWaiting, 1), qi("d", QEntryWaiting, 2)}
 	got := ids(qPlaceNew(items, qi("n", QEntryWaiting, 0)))
@@ -20,7 +20,7 @@ func TestQueuePlaceNewGoesBeforePerformed(t *testing.T) {
 	}
 }
 
-func TestQueuePlaceNewIntoEmptyAndAllPerformed(t *testing.T) {
+func TestQueuePlaceNewIntoEmptyAndAllToday(t *testing.T) {
 	if got := ids(qPlaceNew(nil, qi("n", QEntryWaiting, 0))); !slices.Equal(got, []string{"n"}) {
 		t.Errorf("пустая очередь: %v", got)
 	}

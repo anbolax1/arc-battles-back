@@ -16,9 +16,9 @@ const (
 
 // queueItem - запись очереди для расчёта порядка.
 type queueItem struct {
-	ID        string
-	Status    string
-	Performed int // сколько раз уже выступала в этой сессии
+	ID     string
+	Status string
+	Today  int // сколько матчей игрок уже сыграл сегодня: кто играл, стоит позади тех, кто нет
 }
 
 // qInMatch - запись вызвана на матч или выступает: она стоит в начале списка.
@@ -63,21 +63,21 @@ func qInsertAt(items []queueItem, at int, it queueItem) []queueItem {
 	return out
 }
 
-// qFreshEnd - место сразу за последним, кто ещё не выступал: новичок встаёт сюда, перед выступавшими.
+// qFreshEnd - место сразу за последним, кто сегодня ещё не играл: новичок встаёт сюда, перед сыгравшими.
 func qFreshEnd(items []queueItem) int {
 	end := 0
 	for i := range items {
-		if items[i].Performed == 0 {
+		if items[i].Today == 0 {
 			end = i + 1
 		}
 	}
 	return end
 }
 
-// qPlaceNew - новая запись: за всеми, кто ещё не выступал, но перед уже выступавшими. Вернувшийся в очередь
-// после выступления в этой сессии встаёт в самый конец: выйти и записаться заново, чтобы обойти очередь, нельзя.
+// qPlaceNew - новая запись: за всеми, кто сегодня ещё не играл, но перед теми, кто уже сыграл. Сыгравший сегодня
+// встаёт в самый конец, поэтому выйти и записаться заново, чтобы обойти очередь, нельзя.
 func qPlaceNew(items []queueItem, it queueItem) []queueItem {
-	if it.Performed > 0 {
+	if it.Today > 0 {
 		return append(items[:len(items):len(items)], it)
 	}
 	return qInsertAt(items, qFreshEnd(items), it)
@@ -99,7 +99,7 @@ func qPlaceSkipped(items []queueItem, id string) []queueItem {
 	if !ok {
 		return items
 	}
-	if it.Performed == 0 {
+	if it.Today == 0 {
 		return qInsertAt(rest, qFreshEnd(rest), it)
 	}
 	return append(rest, it)
