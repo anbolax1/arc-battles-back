@@ -214,6 +214,12 @@ func TestQueueAPIPermissions(t *testing.T) {
 		a.want(mod, "GET", path, nil, 200)
 	}
 
+	// Свои вызовы видит только вошедший.
+	a.want(anon, "GET", "/queue/me", nil, 401)
+	if out := a.want(player, "GET", "/queue/me", nil, 200); len(out["calls"].([]any)) != 0 {
+		t.Errorf("вызовов ещё нет: %v", out)
+	}
+
 	// Запись требует входа.
 	a.want(anon, "POST", "/queue/sessions/"+sid+"/join", nil, 401)
 	a.want(anon, "POST", "/queue/sessions/"+sid+"/leave", nil, 401)
@@ -246,6 +252,19 @@ func TestQueueAPIPermissions(t *testing.T) {
 	snap = a.want(mod, "POST", "/queue/sessions", map[string]any{"title": "itest от модератора", "format": "1x1"}, 200)
 	sid = sessionID(snap)
 	a.want(player, "POST", "/queue/sessions/"+sid+"/join", nil, 200)
+
+	// Вызванный игрок узнаёт о вызове запросом «мои вызовы» (его читает плашка на любой странице сайта).
+	a.want(boss, "POST", "/queue/sessions/"+sid+"/call", nil, 200)
+	out := a.want(player, "GET", "/queue/me", nil, 200)
+	calls := out["calls"].([]any)
+	if len(calls) != 1 || calls[0].(map[string]any)["needsConfirm"] != true || calls[0].(map[string]any)["sessionId"] != sid {
+		t.Errorf("вызов не виден: %v", out)
+	}
+	if out := a.want(victim, "GET", "/queue/me", nil, 200); len(out["calls"].([]any)) != 0 {
+		t.Errorf("чужой вызов виден: %v", out)
+	}
+	a.want(player, "POST", "/queue/sessions/"+sid+"/confirm", nil, 200)
+	a.want(boss, "POST", "/queue/sessions/"+sid+"/match/cancel", nil, 200)
 
 	// Организатор видит журнал и может всё то, что запрещено остальным.
 	a.want(boss, "GET", "/queue/sessions/"+sid+"/events", nil, 200)

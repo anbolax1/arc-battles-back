@@ -122,6 +122,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/me/reset", s.handleResetRating)
 			r.Get("/player-search", s.handleSearchPlayers)
 			// Очередь выступлений: запись, выход и подтверждение готовности - только за себя.
+			r.Get("/queue/me", s.handleQueueMyCalls)
 			r.Post("/queue/sessions/{id}/join", s.handleQueueJoin)
 			r.Post("/queue/sessions/{id}/leave", s.handleQueueLeave)
 			r.Post("/queue/sessions/{id}/confirm", s.handleQueueConfirm)

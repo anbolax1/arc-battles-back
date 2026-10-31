@@ -1,10 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/battle-for-respect/backend/internal/store"
@@ -104,6 +106,17 @@ func (s *Server) writeQueueSnapshot(w http.ResponseWriter, r *http.Request, id s
 	writeJSON(w, http.StatusOK, snap)
 }
 
+// GET /api/queue/me - вызовы вошедшего игрока: сайт показывает их плашкой на любой странице.
+func (s *Server) handleQueueMyCalls(w http.ResponseWriter, r *http.Request) {
+	calls, err := s.Store.QueueMyCalls(r.Context(), viewerID(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"serverTime": time.Now().UTC(), "calls": calls})
+}
+
 // GET /api/queue/sessions - все сессии очереди, новые сверху.
 func (s *Server) handleListQueueSessions(w http.ResponseWriter, r *http.Request) {
 	list, err := s.Store.ListQueueSessions(r.Context(), 100)
@@ -196,7 +209,6 @@ type queueSessionBody struct {
 	Title             *string `json:"title"`
 	Format            *string `json:"format"`
 	ConfirmTimeoutSec *int    `json:"confirmTimeoutSec"`
-	MatchSize         *int    `json:"matchSize"`
 }
 
 func (b *queueSessionBody) check() string {
@@ -210,7 +222,7 @@ func (b *queueSessionBody) check() string {
 	return ""
 }
 
-// POST /api/queue/sessions {title?, format, confirmTimeoutSec?, matchSize?} - открыть очередь на стрим.
+// POST /api/queue/sessions {title?, format, confirmTimeoutSec?} - открыть очередь на стрим.
 func (s *Server) handleCreateQueueSession(w http.ResponseWriter, r *http.Request) {
 	var b queueSessionBody
 	if err := readJSON(r, &b); err != nil {
@@ -230,9 +242,6 @@ func (s *Server) handleCreateQueueSession(w http.ResponseWriter, r *http.Request
 	}
 	if b.ConfirmTimeoutSec != nil {
 		in.ConfirmTimeoutSec = *b.ConfirmTimeoutSec
-	}
-	if b.MatchSize != nil {
-		in.MatchSize = *b.MatchSize
 	}
 	res, err := s.Store.CreateQueueSession(r.Context(), actorID(r), in)
 	if err != nil {
@@ -254,7 +263,7 @@ func (s *Server) handleUpdateQueueSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	res, err := s.Store.UpdateQueueSession(r.Context(), chi.URLParam(r, "id"), actorID(r), store.QueueSessionPatch{
-		Title: b.Title, Format: b.Format, ConfirmTimeoutSec: b.ConfirmTimeoutSec, MatchSize: b.MatchSize,
+		Title: b.Title, Format: b.Format, ConfirmTimeoutSec: b.ConfirmTimeoutSec,
 	})
 	if err != nil {
 		writeQueueError(w, err)
@@ -405,10 +414,13 @@ func (s *Server) handleQueueRemove(w http.ResponseWriter, r *http.Request) {
 	s.queueAnswer(w, r, res)
 }
 
-// POST /api/queue/sessions/{id}/match/start {force?} - выпустить вызванных в эфир.
+// POST /api/queue/sessions/{id}/match/start {force?, rounds?, playerType?} - создать матч сайта для вызванных двоих.
+// Матч сразу становится текущим: пики-баны и раунды идут в консоли матча.
 func (s *Server) handleQueueMatchStart(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Force bool `json:"force"`
+		Force      bool   `json:"force"`
+		Rounds     int    `json:"rounds"`
+		PlayerType string `json:"playerType"`
 	}
 	if r.ContentLength != 0 {
 		if err := readJSON(r, &b); err != nil {
@@ -416,11 +428,14 @@ func (s *Server) handleQueueMatchStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	res, err := s.Store.StartQueueMatch(r.Context(), chi.URLParam(r, "id"), actorID(r), b.Force)
+	res, err := s.Store.StartQueueMatch(r.Context(), chi.URLParam(r, "id"), actorID(r), store.QueueMatchStart{
+		Force: b.Force, Rounds: b.Rounds, PlayerType: b.PlayerType,
+	})
 	if err != nil {
 		writeQueueError(w, err)
 		return
 	}
+	s.publishMatchOverlay(r.Context(), res.MatchID)
 	s.queueAnswer(w, r, res)
 }
 
@@ -442,4 +457,11 @@ func (s *Server) handleQueueMatchCancel(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.queueAnswer(w, r, res)
+}
+
+// settleQueueMatch продвигает очередь вслед за матчем сайта: завершён или отменён - участники больше не в эфире.
+func (s *Server) settleQueueMatch(ctx context.Context, ref store.QueueMatchRef, actor string, finished bool) {
+	if res, changed, err := s.Store.SettleQueueMatch(ctx, ref, actor, finished); err == nil && changed {
+		s.publishQueue(res)
+	}
 }

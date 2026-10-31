@@ -18,7 +18,11 @@ type QueueResult struct {
 	Format    string
 	Rev       int64
 	EntryID   string // созданная или затронутая запись, если действие про одну запись
+	MatchID   string // матч сайта, созданный действием
 }
+
+// queueMatchSize - в матче всегда две стороны: игрок против игрока или команда против команды.
+const queueMatchSize = 2
 
 // qtx - транзакция над одной сессией. Строка сессии заблокирована до конца: любые изменения очереди
 // идут по одному, поэтому позиции, вызовы и записи не расходятся.
@@ -33,7 +37,7 @@ type qtx struct {
 type qSession struct {
 	ID, Title, Format, Status string
 	RegistrationOpen, Paused  bool
-	TimeoutSec, MatchSize     int
+	TimeoutSec                int
 	Rev                       int64
 }
 
@@ -48,10 +52,10 @@ func (s *Store) queueTx(ctx context.Context, sessionID, actor string, fn func(q 
 	defer tx.Rollback(ctx)
 	q := &qtx{ctx: ctx, tx: tx, actor: actor}
 	err = tx.QueryRow(ctx, `
-		SELECT id, title, format, status, registration_open, paused, confirm_timeout_sec, match_size, rev
+		SELECT id, title, format, status, registration_open, paused, confirm_timeout_sec, rev
 		FROM queue_sessions WHERE id = $1 FOR UPDATE`, sessionID).
 		Scan(&q.sess.ID, &q.sess.Title, &q.sess.Format, &q.sess.Status, &q.sess.RegistrationOpen, &q.sess.Paused,
-			&q.sess.TimeoutSec, &q.sess.MatchSize, &q.sess.Rev)
+			&q.sess.TimeoutSec, &q.sess.Rev)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return QueueResult{}, ErrNotFound
 	}
@@ -284,7 +288,6 @@ type QueueSessionInput struct {
 	Title             string
 	Format            string
 	ConfirmTimeoutSec int
-	MatchSize         int
 }
 
 // QueueDefaultTitle - название сессии по умолчанию: «Очередь на выступления | 30.10.2026».
@@ -303,14 +306,8 @@ func (s *Store) CreateQueueSession(ctx context.Context, actor string, in QueueSe
 	if in.ConfirmTimeoutSec == 0 {
 		in.ConfirmTimeoutSec = 60
 	}
-	if in.MatchSize == 0 {
-		in.MatchSize = 2
-	}
 	if in.ConfirmTimeoutSec < 10 || in.ConfirmTimeoutSec > 600 {
 		return QueueResult{}, qInvalid("время на подтверждение — от 10 до 600 секунд")
-	}
-	if in.MatchSize != 1 && in.MatchSize != 2 {
-		return QueueResult{}, qInvalid("на матч выходят одна или две записи")
 	}
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
@@ -323,9 +320,9 @@ func (s *Store) CreateQueueSession(ctx context.Context, actor string, in QueueSe
 	}
 	var res QueueResult
 	err = tx.QueryRow(ctx, `
-		INSERT INTO queue_sessions (title, format, confirm_timeout_sec, match_size, created_by)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id, format, rev`,
-		in.Title, in.Format, in.ConfirmTimeoutSec, in.MatchSize, by).Scan(&res.SessionID, &res.Format, &res.Rev)
+		INSERT INTO queue_sessions (title, format, confirm_timeout_sec, created_by)
+		VALUES ($1, $2, $3, $4) RETURNING id, format, rev`,
+		in.Title, in.Format, in.ConfirmTimeoutSec, by).Scan(&res.SessionID, &res.Format, &res.Rev)
 	if isUnique(err, "queue_sessions_one_active") {
 		return QueueResult{}, qState(fmt.Sprintf("Очередь %s уже идёт — завершите её, чтобы начать новую", formatLabel(in.Format)))
 	}
@@ -352,7 +349,6 @@ type QueueSessionPatch struct {
 	Title             *string
 	Format            *string
 	ConfirmTimeoutSec *int
-	MatchSize         *int
 }
 
 // UpdateQueueSession меняет название, формат и настройки вызова. Формат и размер матча меняются,
@@ -385,16 +381,6 @@ func (s *Store) UpdateQueueSession(ctx context.Context, sessionID, actor string,
 			q.sess.TimeoutSec = *p.ConfirmTimeoutSec
 			data["confirmTimeoutSec"] = *p.ConfirmTimeoutSec
 		}
-		if p.MatchSize != nil && *p.MatchSize != q.sess.MatchSize {
-			if *p.MatchSize != 1 && *p.MatchSize != 2 {
-				return qInvalid("на матч выходят одна или две записи")
-			}
-			if m != nil {
-				return qState("Размер матча меняется, когда матч не идёт")
-			}
-			q.sess.MatchSize = *p.MatchSize
-			data["matchSize"] = *p.MatchSize
-		}
 		if p.Format != nil && *p.Format != q.sess.Format {
 			if *p.Format != "1x1" && *p.Format != "2x2" {
 				return qInvalid("формат очереди — 1×1 или 2×2")
@@ -407,8 +393,8 @@ func (s *Store) UpdateQueueSession(ctx context.Context, sessionID, actor string,
 			data["format"] = *p.Format
 		}
 		_, err = q.tx.Exec(q.ctx, `
-			UPDATE queue_sessions SET title = $2, format = $3, confirm_timeout_sec = $4, match_size = $5 WHERE id = $1`,
-			q.sess.ID, q.sess.Title, q.sess.Format, q.sess.TimeoutSec, q.sess.MatchSize)
+			UPDATE queue_sessions SET title = $2, format = $3, confirm_timeout_sec = $4 WHERE id = $1`,
+			q.sess.ID, q.sess.Title, q.sess.Format, q.sess.TimeoutSec)
 		if isUnique(err, "queue_sessions_one_active") {
 			return qState(fmt.Sprintf("Очередь %s уже идёт", formatLabel(q.sess.Format)))
 		}
@@ -715,7 +701,7 @@ func (s *Store) CallEntry(ctx context.Context, sessionID, actor, entryID string)
 			if taken, err = q.matchEntries(m.ID); err != nil {
 				return err
 			}
-			if len(taken) >= q.sess.MatchSize {
+			if len(taken) >= queueMatchSize {
 				return qState("Матч уже собран")
 			}
 		}
@@ -856,9 +842,30 @@ func (s *Store) ConfirmEntry(ctx context.Context, sessionID, actor, entryID stri
 	})
 }
 
-// StartQueueMatch выпускает вызванных в эфир. Без force нужны все стороны и подтверждение готовности каждой.
-func (s *Store) StartQueueMatch(ctx context.Context, sessionID, actor string, force bool) (QueueResult, error) {
-	return s.queueTx(ctx, sessionID, actor, func(q *qtx) error {
+// QueueMatchStart - как создать матч сайта для вызванной пары.
+type QueueMatchStart struct {
+	Force      bool   // создать, не дожидаясь подтверждения готовности
+	Rounds     int    // 2 или 3 раунда, по умолчанию 2
+	PlayerType string // pve | pvp | pvpve, по умолчанию pvp
+}
+
+// StartQueueMatch создаёт матч сайта для двух вызванных (он сразу становится текущим, дальше пики-баны и раунды
+// идут в консоли матча) и переводит их в эфир. Без Force нужны обе стороны и подтверждение готовности каждой.
+func (s *Store) StartQueueMatch(ctx context.Context, sessionID, actor string, in QueueMatchStart) (QueueResult, error) {
+	if in.Rounds == 0 {
+		in.Rounds = 2
+	}
+	if in.PlayerType == "" {
+		in.PlayerType = "pvp"
+	}
+	if in.Rounds != 2 && in.Rounds != 3 {
+		return QueueResult{}, qInvalid("в матче два или три раунда")
+	}
+	if in.PlayerType != "pve" && in.PlayerType != "pvp" && in.PlayerType != "pvpve" {
+		return QueueResult{}, qInvalid("тип игроков - pve, pvp или pvpve")
+	}
+	var created string
+	res, err := s.queueTx(ctx, sessionID, actor, func(q *qtx) error {
 		if err := q.needActive(); err != nil {
 			return err
 		}
@@ -879,33 +886,74 @@ func (s *Store) StartQueueMatch(ctx context.Context, sessionID, actor string, fo
 		if err != nil {
 			return err
 		}
+		if len(ids) < queueMatchSize {
+			return qState("Матч не собран: вызовите второго участника")
+		}
 		_, byID, err := q.load()
 		if err != nil {
 			return err
 		}
-		if !force {
-			if len(ids) < q.sess.MatchSize {
-				return qState("Матч не собран: вызовите ещё участника или начните принудительно")
+		match := NewMatch{Mode: q.sess.Format, PlayerType: in.PlayerType, Format: FormatMatch, Rounds: in.Rounds}
+		for i, id := range ids {
+			e, ok := byID[id]
+			if !ok {
+				return qState("Участник матча ушёл из очереди")
 			}
-			for _, id := range ids {
-				if byID[id].Status != QEntryReady {
-					return qState("Не все подтвердили готовность")
-				}
+			if !in.Force && e.Status != QEntryReady {
+				return qState("Не все подтвердили готовность")
 			}
+			if q.sess.Format == "2x2" {
+				match.Sides[i] = MatchSide{TeamKey: e.TeamKey}
+				continue
+			}
+			var uid string
+			if err := q.tx.QueryRow(q.ctx, `SELECT user_id FROM queue_entry_members WHERE entry_id = $1`, id).Scan(&uid); err != nil {
+				return err
+			}
+			match.Sides[i] = MatchSide{UserID: uid}
 		}
+		t, err := s.CreateMatch(ctx, match)
+		switch {
+		case errors.Is(err, ErrLiveMatchExists):
+			return qState("Сейчас идёт другой матч - завершите или отмените его, потом создавайте этот")
+		case errors.Is(err, ErrConflict):
+			return qState("Стороны матча должны быть разными игроками")
+		case errors.Is(err, ErrNotFound):
+			return qState("Игрок или команда матча не найдены")
+		case err != nil:
+			return err
+		}
+		created = t.ID
 		for _, id := range ids {
 			if _, err := q.tx.Exec(q.ctx, `UPDATE queue_entries SET status = 'performing', invite_expires_at = NULL WHERE id = $1`, id); err != nil {
 				return err
 			}
 		}
-		if _, err := q.tx.Exec(q.ctx, `UPDATE queue_matches SET status = 'live', started_at = now() WHERE id = $1`, m.ID); err != nil {
+		if _, err := q.tx.Exec(q.ctx, `UPDATE queue_matches SET status = 'live', started_at = now(), tournament_id = $2 WHERE id = $1`, m.ID, t.ID); err != nil {
 			return err
 		}
-		return q.event("match_started", "", m.ID, "", map[string]any{"match": m.Number, "forced": force})
+		q.res.MatchID = t.ID
+		return q.event("match_started", "", m.ID, "", map[string]any{"match": m.Number, "forced": in.Force, "tournamentId": t.ID})
 	})
+	if err != nil && created != "" {
+		_ = s.DeleteTournament(ctx, created) // очередь не приняла матч - настоящий матч не остаётся без пары
+	}
+	return res, err
 }
 
-// FinishQueueMatch фиксирует выступление: игроки идут в конец очереди, число их выступлений растёт.
+// linkedSiteMatchOpen - у матча очереди есть матч сайта, который ещё не завершён.
+func (q *qtx) linkedSiteMatchOpen(matchID string) (bool, error) {
+	var status *string
+	err := q.tx.QueryRow(q.ctx, `
+		SELECT t.status FROM queue_matches m JOIN tournaments t ON t.id = m.tournament_id WHERE m.id = $1`, matchID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return status != nil && *status != "finished", err
+}
+
+// FinishQueueMatch фиксирует выступление вручную: игроки идут в конец очереди, число их выступлений растёт.
+// Пока матч сайта идёт, его завершают в консоли матча - очередь продвинется сама.
 func (s *Store) FinishQueueMatch(ctx context.Context, sessionID, actor string) (QueueResult, error) {
 	return s.queueTx(ctx, sessionID, actor, func(q *qtx) error {
 		if err := q.needActive(); err != nil {
@@ -918,37 +966,47 @@ func (s *Store) FinishQueueMatch(ctx context.Context, sessionID, actor string) (
 		if m == nil || m.Status != "live" {
 			return qState("Нет матча в эфире")
 		}
-		ids, err := q.matchEntries(m.ID)
-		if err != nil {
+		if open, err := q.linkedSiteMatchOpen(m.ID); err != nil {
 			return err
+		} else if open {
+			return qState("Матч сайта ещё идёт: завершите его в консоли матча, очередь продвинется сама")
 		}
-		items, byID, err := q.load()
-		if err != nil {
-			return err
-		}
-		for _, id := range ids {
-			if _, alive := byID[id]; !alive {
-				continue // запись закрыта (аккаунт удалён) - в очередь не возвращается
-			}
-			if _, err := q.tx.Exec(q.ctx, `UPDATE queue_entries SET performed_count = performed_count + 1 WHERE id = $1`, id); err != nil {
-				return err
-			}
-			if err := q.resetEntry(id, QEntryWaiting); err != nil {
-				return err
-			}
-			items = qPlaceBack(items, id)
-		}
-		if err := q.writeOrder(items); err != nil {
-			return err
-		}
-		if _, err := q.tx.Exec(q.ctx, `UPDATE queue_matches SET status = 'finished', finished_at = now() WHERE id = $1`, m.ID); err != nil {
-			return err
-		}
-		return q.event("match_finished", "", m.ID, "", map[string]any{"match": m.Number})
+		return q.finishMatch(m)
 	})
 }
 
-// CancelQueueMatch отменяет подготовку или эфир: вызванные возвращаются в ожидание, выступление не засчитывается.
+func (q *qtx) finishMatch(m *qMatchRow) error {
+	ids, err := q.matchEntries(m.ID)
+	if err != nil {
+		return err
+	}
+	items, byID, err := q.load()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, alive := byID[id]; !alive {
+			continue // запись закрыта (аккаунт удалён) - в очередь не возвращается
+		}
+		if _, err := q.tx.Exec(q.ctx, `UPDATE queue_entries SET performed_count = performed_count + 1 WHERE id = $1`, id); err != nil {
+			return err
+		}
+		if err := q.resetEntry(id, QEntryWaiting); err != nil {
+			return err
+		}
+		items = qPlaceBack(items, id)
+	}
+	if err := q.writeOrder(items); err != nil {
+		return err
+	}
+	if _, err := q.tx.Exec(q.ctx, `UPDATE queue_matches SET status = 'finished', finished_at = now() WHERE id = $1`, m.ID); err != nil {
+		return err
+	}
+	return q.event("match_finished", "", m.ID, "", map[string]any{"match": m.Number})
+}
+
+// CancelQueueMatch отменяет подготовку: вызванные возвращаются в ожидание, выступление не засчитывается.
+// Матч сайта, уже созданный для пары, отменяют в консоли матча - очередь вернётся сама.
 func (s *Store) CancelQueueMatch(ctx context.Context, sessionID, actor string) (QueueResult, error) {
 	return s.queueTx(ctx, sessionID, actor, func(q *qtx) error {
 		if err := q.needActive(); err != nil {
@@ -961,8 +1019,48 @@ func (s *Store) CancelQueueMatch(ctx context.Context, sessionID, actor string) (
 		if m == nil {
 			return qState("Нет матча для отмены")
 		}
+		if open, err := q.linkedSiteMatchOpen(m.ID); err != nil {
+			return err
+		} else if open {
+			return qState("Матч сайта уже создан: отмените его в консоли матча, очередь вернётся сама")
+		}
 		return q.cancelMatch(m, "cancel")
 	})
+}
+
+// QueueMatchRef - матч очереди, к которому привязан матч сайта.
+type QueueMatchRef struct{ SessionID, MatchID string }
+
+// QueueMatchOfTournament - матч очереди, идущий вместе с матчем сайта.
+func (s *Store) QueueMatchOfTournament(ctx context.Context, tournamentID string) (QueueMatchRef, bool) {
+	var ref QueueMatchRef
+	err := s.Pool.QueryRow(ctx, `
+		SELECT session_id, id FROM queue_matches WHERE tournament_id = $1 AND status = 'live'`, tournamentID).Scan(&ref.SessionID, &ref.MatchID)
+	return ref, err == nil
+}
+
+var errQueueNothing = errors.New("нечего менять")
+
+// SettleQueueMatch продвигает очередь вслед за матчем сайта: завершён - участники уходят в конец, отменён -
+// возвращаются в ожидание. Ничего не делает, если матч очереди уже не идёт.
+func (s *Store) SettleQueueMatch(ctx context.Context, ref QueueMatchRef, actor string, finished bool) (QueueResult, bool, error) {
+	res, err := s.queueTx(ctx, ref.SessionID, actor, func(q *qtx) error {
+		m, err := q.openMatch()
+		if err != nil {
+			return err
+		}
+		if m == nil || m.ID != ref.MatchID || m.Status != "live" {
+			return errQueueNothing
+		}
+		if finished {
+			return q.finishMatch(m)
+		}
+		return q.cancelMatch(m, "site_match_cancelled")
+	})
+	if errors.Is(err, errQueueNothing) {
+		return QueueResult{}, false, nil
+	}
+	return res, err == nil, err
 }
 
 func (q *qtx) cancelMatch(m *qMatchRow, reason string) error {

@@ -561,9 +561,13 @@ func (s *Server) handleFinishMatch(w http.ResponseWriter, r *http.Request) {
 	if !s.matchGuard(w, r, id) {
 		return
 	}
+	qref, queued := s.Store.QueueMatchOfTournament(r.Context(), id)
 	if _, err := s.Store.FinishMatch(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if queued {
+		s.settleQueueMatch(r.Context(), qref, actorID(r), true)
 	}
 	s.flashPatches(r.Context(), id, s.syncPatches(r.Context()))
 	s.writeMatch(w, r, id, http.StatusOK)
@@ -576,9 +580,13 @@ func (s *Server) handleCancelMatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	preview := s.Store.ShowPreviewPath(r.Context(), id)
+	qref, queued := s.Store.QueueMatchOfTournament(r.Context(), id)
 	if err := s.Store.DeleteTournament(r.Context(), id); err != nil && !errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if queued {
+		s.settleQueueMatch(r.Context(), qref, actorID(r), false)
 	}
 	s.Media.Remove(preview)
 	s.syncPatches(r.Context())

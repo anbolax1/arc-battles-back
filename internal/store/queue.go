@@ -51,7 +51,7 @@ func QueueSessionState(status string, registrationOpen, paused bool) string {
 }
 
 const queueSessionCols = `s.id, s.title, s.format, s.status, s.registration_open, s.paused, s.confirm_timeout_sec,
-	s.match_size, s.rev, s.created_at, s.finished_at, COALESCE(NULLIF(cu.display_name, ''), cu.login, ''),
+	s.rev, s.created_at, s.finished_at, COALESCE(NULLIF(cu.display_name, ''), cu.login, ''),
 	(SELECT COUNT(*) FROM queue_entries e WHERE e.session_id = s.id AND e.position IS NOT NULL)::int,
 	(SELECT COUNT(*) FROM queue_matches m WHERE m.session_id = s.id AND m.status = 'finished')::int`
 
@@ -61,7 +61,7 @@ func scanQueueSession(row pgx.Row) (models.QueueSession, error) {
 	var q models.QueueSession
 	var status string
 	err := row.Scan(&q.ID, &q.Title, &q.Format, &status, &q.RegistrationOpen, &q.Paused, &q.ConfirmTimeoutSec,
-		&q.MatchSize, &q.Rev, &q.CreatedAt, &q.FinishedAt, &q.CreatedBy, &q.Waiting, &q.Played)
+		&q.Rev, &q.CreatedAt, &q.FinishedAt, &q.CreatedBy, &q.Waiting, &q.Played)
 	q.State = QueueSessionState(status, q.RegistrationOpen, q.Paused)
 	return q, err
 }
@@ -278,7 +278,7 @@ func queuePriorityToday(ctx context.Context, db queryer, userIDs []string) (map[
 // queueMatchRows - матчи сессии: onlyOpen - только идущий (подготовка или эфир), иначе все по порядку.
 func queueMatchRows(ctx context.Context, db queryer, sessionID string, onlyOpen bool, limit int) ([]models.QueueMatch, error) {
 	rows, err := db.Query(ctx, `
-		SELECT id, number, status, created_at, started_at, finished_at
+		SELECT id, number, status, COALESCE(tournament_id, ''), created_at, started_at, finished_at
 		FROM queue_matches WHERE session_id = $1 AND (NOT $2 OR status IN ('preparing', 'live'))
 		ORDER BY number DESC LIMIT $3`, sessionID, onlyOpen, limit)
 	if err != nil {
@@ -289,7 +289,7 @@ func queueMatchRows(ctx context.Context, db queryer, sessionID string, onlyOpen 
 	ids := []string{}
 	for rows.Next() {
 		var m models.QueueMatch
-		if err := rows.Scan(&m.ID, &m.Number, &m.Status, &m.CreatedAt, &m.StartedAt, &m.FinishedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Number, &m.Status, &m.TournamentID, &m.CreatedAt, &m.StartedAt, &m.FinishedAt); err != nil {
 			return nil, err
 		}
 		m.Sides = []models.QueueMatchSide{}
@@ -548,6 +548,35 @@ func (s *Store) QueueEvents(ctx context.Context, sessionID string, limit int) ([
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// QueueMyCalls - записи игрока в живых очередях, которые вызваны на матч или в эфире.
+func (s *Store) QueueMyCalls(ctx context.Context, userID string) ([]models.QueueCall, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT s.id, s.format, s.title, e.id, e.status, e.position, e.invite_expires_at,
+		       COALESCE(NULLIF(e.team_name, ''), NULLIF(u.display_name, ''), u.login), m.ready_at IS NOT NULL
+		FROM queue_entry_members m
+		JOIN queue_entries e ON e.id = m.entry_id
+		JOIN queue_sessions s ON s.id = e.session_id
+		JOIN users u ON u.id = m.user_id
+		WHERE m.user_id = $1 AND m.active AND s.status = 'active' AND e.status IN ('invited', 'ready', 'performing')
+		ORDER BY s.format`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.QueueCall{}
+	for rows.Next() {
+		var c models.QueueCall
+		var ready bool
+		if err := rows.Scan(&c.SessionID, &c.Format, &c.Title, &c.EntryID, &c.Status, &c.Position, &c.InviteExpiresAt, &c.Name, &ready); err != nil {
+			return nil, err
+		}
+		c.NeedsConfirm = c.Status == QEntryInvited && !ready
+		c.Confirmed = c.Status == QEntryInvited && ready
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }

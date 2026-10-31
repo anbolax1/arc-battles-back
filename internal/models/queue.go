@@ -11,7 +11,6 @@ type QueueSession struct {
 	RegistrationOpen  bool       `json:"registrationOpen"`
 	Paused            bool       `json:"paused"`
 	ConfirmTimeoutSec int        `json:"confirmTimeoutSec"`
-	MatchSize         int        `json:"matchSize"` // сколько записей выходит на один матч
 	Rev               int64      `json:"rev"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	FinishedAt        *time.Time `json:"finishedAt,omitempty"`
@@ -61,13 +60,14 @@ type QueueMatchSide struct {
 
 // QueueMatch - матч очереди. Status: preparing | live | finished | cancelled.
 type QueueMatch struct {
-	ID         string           `json:"id"`
-	Number     int              `json:"number"`
-	Status     string           `json:"status"`
-	CreatedAt  time.Time        `json:"createdAt"`
-	StartedAt  *time.Time       `json:"startedAt,omitempty"`
-	FinishedAt *time.Time       `json:"finishedAt,omitempty"`
-	Sides      []QueueMatchSide `json:"sides"`
+	ID           string           `json:"id"`
+	Number       int              `json:"number"`
+	TournamentID string           `json:"tournamentId,omitempty"` // матч сайта, созданный для этой пары
+	Status       string           `json:"status"`
+	CreatedAt    time.Time        `json:"createdAt"`
+	StartedAt    *time.Time       `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time       `json:"finishedAt,omitempty"`
+	Sides        []QueueMatchSide `json:"sides"`
 }
 
 // QueueEvent - строка журнала сессии: вызов, пропуск, действие организатора.
@@ -121,4 +121,19 @@ type QueueSnapshot struct {
 	Active     []QueueSessionRef `json:"active"`          // живые очереди всех форматов
 	Me         *QueueMe          `json:"me,omitempty"`    // только для вошедшего игрока
 	History    []QueueMatch      `json:"history"`         // сыгранные и отменённые матчи, новые сверху
+}
+
+// QueueCall - запись игрока, которую вызвали на матч или которая уже в эфире: по ней сайт показывает плашку
+// на любой странице, не только на странице очереди.
+type QueueCall struct {
+	SessionID       string     `json:"sessionId"`
+	Format          string     `json:"format"`
+	Title           string     `json:"title"`
+	EntryID         string     `json:"entryId"`
+	Name            string     `json:"name"`
+	Status          string     `json:"status"` // invited | ready | performing
+	Position        int        `json:"position"`
+	InviteExpiresAt *time.Time `json:"inviteExpiresAt,omitempty"`
+	NeedsConfirm    bool       `json:"needsConfirm"` // вызвали, а он ещё не подтвердил
+	Confirmed       bool       `json:"confirmed"`    // он подтвердил, ждём напарника или начала
 }

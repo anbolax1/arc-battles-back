@@ -66,12 +66,36 @@ func newQueueEnv(t *testing.T) *queueEnv {
 	if _, err := pool.Exec(ctx, `UPDATE queue_sessions SET status = 'finished', finished_at = now() WHERE status = 'active' AND title LIKE 'itest %'`); err != nil {
 		t.Fatal(err)
 	}
-	var foreign int
+	// Матчи сайта прошлых упавших прогонов убираем: идёт не больше одного матча.
+	if _, err := pool.Exec(ctx, `DELETE FROM tournaments WHERE id IN (
+		SELECT m.tournament_id FROM queue_matches m JOIN queue_sessions s ON s.id = m.session_id WHERE s.title LIKE 'itest %')`); err != nil {
+		t.Fatal(err)
+	}
+	var foreign, liveMatches int
 	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM queue_sessions WHERE status = 'active'`).Scan(&foreign)
 	if foreign > 0 {
 		t.Skip("в базе есть чужая живая очередь")
 	}
+	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM tournaments WHERE status = 'live'`).Scan(&liveMatches)
+	if liveMatches > 0 {
+		t.Skip("в базе идёт чужой матч: очередь создаёт настоящие матчи, а живой матч может быть только один")
+	}
 	return e
+}
+
+// finishMatch завершает матч сайта, созданный очередью, и матч очереди.
+func (e *queueEnv) finishMatch(sid string) {
+	e.t.Helper()
+	var tid string
+	if err := e.pool.QueryRow(e.ctx, `SELECT tournament_id FROM queue_matches WHERE session_id = $1 AND status = 'live'`, sid).Scan(&tid); err != nil {
+		e.t.Fatalf("матч в эфире: %v", err)
+	}
+	if _, err := e.st.FinishMatch(e.ctx, tid); err != nil {
+		e.t.Fatalf("FinishMatch: %v", err)
+	}
+	if _, err := e.st.FinishQueueMatch(e.ctx, sid, ""); err != nil {
+		e.t.Fatalf("FinishQueueMatch: %v", err)
+	}
 }
 
 func (e *queueEnv) user(tag string) models.User {
@@ -91,6 +115,8 @@ func (e *queueEnv) session(format string) string {
 		e.t.Fatalf("CreateQueueSession(%s): %v", format, err)
 	}
 	e.t.Cleanup(func() {
+		// Пул в тесте с «перезапуском» заменён, поэтому берём текущий.
+		_, _ = e.pool.Exec(context.Background(), `DELETE FROM tournaments WHERE id IN (SELECT tournament_id FROM queue_matches WHERE session_id = $1)`, res.SessionID)
 		_, _ = e.pool.Exec(context.Background(), `UPDATE queue_sessions SET status = 'finished', finished_at = now() WHERE id = $1`, res.SessionID)
 	})
 	return res.SessionID
@@ -233,7 +259,7 @@ func TestQueueFlowFifoAndMoveToEnd(t *testing.T) {
 	}
 
 	// Начать нельзя: не собрана вторая сторона и нет подтверждения.
-	_, err = e.st.StartQueueMatch(e.ctx, sid, "", false)
+	_, err = e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{})
 	wantKind(t, err, store.ErrQueueState)
 	if _, err := e.st.CallEntry(e.ctx, sid, "", ""); err != nil {
 		t.Fatal(err)
@@ -241,7 +267,7 @@ func TestQueueFlowFifoAndMoveToEnd(t *testing.T) {
 	// Третьего вызвать нельзя - матч собран.
 	_, err = e.st.CallEntry(e.ctx, sid, "", "")
 	wantKind(t, err, store.ErrQueueState)
-	_, err = e.st.StartQueueMatch(e.ctx, sid, "", false)
+	_, err = e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{})
 	wantKind(t, err, store.ErrQueueState)
 
 	// Подтверждение: чужой игрок не вызывался, вызванные подтверждают сами.
@@ -256,12 +282,12 @@ func TestQueueFlowFifoAndMoveToEnd(t *testing.T) {
 	if _, err := e.st.ConfirmReady(e.ctx, sid, a.ID); err != nil {
 		t.Errorf("повторное подтверждение: %v", err)
 	}
-	_, err = e.st.StartQueueMatch(e.ctx, sid, "", false)
+	_, err = e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{})
 	wantKind(t, err, store.ErrQueueState) // b не подтвердил
 	if _, err := e.st.ConfirmReady(e.ctx, sid, b.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", false); err != nil {
+	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{}); err != nil {
 		t.Fatal(err)
 	}
 	s = e.snap(sid, "")
@@ -275,9 +301,7 @@ func TestQueueFlowFifoAndMoveToEnd(t *testing.T) {
 	wantKind(t, err, store.ErrQueueState)
 
 	// Новичок во время эфира встаёт за ждущими, но перед теми, кто уже выступил.
-	if _, err := e.st.FinishQueueMatch(e.ctx, sid, ""); err != nil {
-		t.Fatal(err)
-	}
+	e.finishMatch(sid)
 	wantOrder(t, e.order(sid), "Ник c", "Ник d", "Ник a", "Ник b")
 	f := e.user("f")
 	e.join(sid, f)
@@ -390,7 +414,7 @@ func TestQueueSkipNoShowAndReturn(t *testing.T) {
 	if _, err := e.st.CallEntry(e.ctx, sid, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", true); err != nil { // принудительный старт без подтверждений
+	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{Force: true}); err != nil { // принудительный старт без подтверждений
 		t.Fatal(err)
 	}
 	_, err = e.st.SkipEntry(e.ctx, sid, "", call.EntryID, "end")
@@ -552,13 +576,11 @@ func TestQueueTeams2x2(t *testing.T) {
 	if _, err := e.st.ConfirmEntry(e.ctx, sid, "", betaEntry); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", false); err != nil {
+	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{}); err != nil {
 		t.Fatal(err)
 	}
 	// После матча команды уходят в конец целиком: напарники не расходятся по позициям.
-	if _, err := e.st.FinishQueueMatch(e.ctx, sid, ""); err != nil {
-		t.Fatal(err)
-	}
+	e.finishMatch(sid)
 	s = e.snap(sid, "")
 	for _, en := range s.Entries {
 		if len(en.Members) != 2 || en.PerformedCount != 1 || en.Status != "waiting" {
@@ -632,14 +654,12 @@ func TestQueueSessionLifecycle(t *testing.T) {
 	if _, err := e.st.CallEntry(e.ctx, sid, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", true); err != nil {
+	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{Force: true}); err != nil {
 		t.Fatal(err)
 	}
 	_, err = e.st.FinishQueueSession(e.ctx, sid, "")
 	wantKind(t, err, store.ErrQueueState)
-	if _, err := e.st.FinishQueueMatch(e.ctx, sid, ""); err != nil {
-		t.Fatal(err)
-	}
+	e.finishMatch(sid)
 
 	// Подготовка матча при завершении сессии отменяется.
 	if _, err := e.st.CallEntry(e.ctx, sid, "", ""); err != nil {
@@ -974,7 +994,7 @@ func TestQueueRestoredAfterRestart(t *testing.T) {
 	if _, err := e.st.ConfirmReady(e.ctx, sid, us[1].ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", false); err != nil {
+	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1002,5 +1022,90 @@ func TestQueueEntryMmrAndPriority(t *testing.T) {
 	}
 	if s.Entries[1].Mmr != start+37 || !s.Entries[1].Priority {
 		t.Errorf("игравший с жетоном: %+v", s.Entries[1])
+	}
+}
+
+// Вызов виден игроку вне страницы очереди: «мои вызовы» отдают вызванных и выступающих, и только их.
+func TestQueueMyCalls(t *testing.T) {
+	e := newQueueEnv(t)
+	calls := func(u models.User) []models.QueueCall {
+		t.Helper()
+		got, err := e.st.QueueMyCalls(e.ctx, u.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	sid := e.session("1x1")
+	a, b, c := e.user("a"), e.user("b"), e.user("c")
+	for _, u := range []models.User{a, b, c} {
+		e.join(sid, u)
+	}
+	if len(calls(a)) != 0 {
+		t.Error("ждущего никто не звал")
+	}
+	if _, err := e.st.CallEntry(e.ctx, sid, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := calls(a)
+	if len(got) != 1 || !got[0].NeedsConfirm || got[0].Confirmed || got[0].Status != "invited" ||
+		got[0].InviteExpiresAt == nil || got[0].SessionID != sid || got[0].Format != "1x1" || got[0].Name != "Ник a" {
+		t.Fatalf("вызванный: %+v", got)
+	}
+	if len(calls(b)) != 0 || len(calls(c)) != 0 {
+		t.Error("вызов виден тем, кого не звали")
+	}
+	if _, err := e.st.ConfirmReady(e.ctx, sid, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls(a); len(got) != 1 || got[0].NeedsConfirm || got[0].Status != "ready" {
+		t.Errorf("подтвердил: %+v", got)
+	}
+	if _, err := e.st.CallEntry(e.ctx, sid, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls(a); len(got) != 1 || got[0].Status != "performing" || got[0].NeedsConfirm {
+		t.Errorf("в эфире: %+v", got)
+	}
+	e.finishMatch(sid)
+	if len(calls(a)) != 0 || len(calls(b)) != 0 {
+		t.Error("после матча вызовов нет")
+	}
+
+	// Команда: вызов виден обоим, у подтвердившего - «ждём напарника», у второго - нужно подтвердить.
+	if _, err := e.st.FinishQueueSession(e.ctx, sid, ""); err != nil {
+		t.Fatal(err)
+	}
+	sid2 := e.session("2x2")
+	x, y := e.user("x"), e.user("y")
+	team, err := e.st.CreateTeam(e.ctx, "Икс", x.ID, y.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.JoinQueue(e.ctx, sid2, x.ID, store.QueueJoin{UserID: x.ID, TeamKey: team.TeamKey}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.CallEntry(e.ctx, sid2, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.ConfirmReady(e.ctx, sid2, x.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls(x); len(got) != 1 || !got[0].Confirmed || got[0].NeedsConfirm || got[0].Name != "Икс" {
+		t.Errorf("подтвердил один из команды: %+v", got)
+	}
+	if got := calls(y); len(got) != 1 || !got[0].NeedsConfirm || got[0].Confirmed {
+		t.Errorf("напарник должен подтвердить: %+v", got)
+	}
+	// Завершённая сессия вызовов не даёт.
+	if _, err := e.st.FinishQueueSession(e.ctx, sid2, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls(x)) != 0 || len(calls(y)) != 0 {
+		t.Error("в завершённой сессии вызовов нет")
 	}
 }
