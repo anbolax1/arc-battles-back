@@ -12,18 +12,24 @@ import (
 	"github.com/battle-for-respect/backend/internal/store"
 )
 
-// loginRe — допустимый логин: латиница, цифры и подчёркивание, 3–32 символа.
-// Узкий набор исключает пробелы, омоглифы и спецсимволы (меньше путаницы и сюрпризов).
-var loginRe = regexp.MustCompile(`^[A-Za-z0-9_]{3,32}$`)
-
 // embarkRe — Embark ID: ник (без «#»), решётка, ровно 4 цифры — напр. «Istwood#1234».
 var embarkRe = regexp.MustCompile(`^[^#]+#\d{4}$`)
 
 const minPasswordLen = 8
 
+// credentials - вход по нику и паролю. Ник приходит в поле nick, прежнее login тоже принимается:
+// так не ломаются открытые вкладки со старой формой.
 type credentials struct {
+	Nick     string `json:"nick"`
 	Login    string `json:"login"`
 	Password string `json:"password"`
+}
+
+func (c credentials) nick() string {
+	if n := strings.TrimSpace(c.Nick); n != "" {
+		return n
+	}
+	return strings.TrimSpace(c.Login)
 }
 
 // clientIP возвращает IP клиента — ключ троттлинга. НЕ доверяем произвольным заголовкам
@@ -54,9 +60,8 @@ var nickRe = regexp.MustCompile(`^\p{L}[\p{L}0-9]*$`)
 // Подсказка игроку про уже заведённый профиль: двойники аккаунтов запрещены.
 const profileExistsHint = "Если ты играл в лиге ранее, профиль уже создан: напиши в дискорд в чат «профиль на сайте»."
 
-// signupBody - поля формы регистрации.
+// signupBody - поля формы регистрации. Ник - это и имя на сайте, и то, чем входят: отдельного логина нет.
 type signupBody struct {
-	Login    string `json:"login"`
 	Password string `json:"password"`
 	Nick     string `json:"nick"`
 	EmbarkID string `json:"embarkId"`
@@ -64,36 +69,32 @@ type signupBody struct {
 
 // validateSignup проверяет поля регистрации и возвращает очищенные значения
 // и текст ошибки для игрока (пустой - всё в порядке).
-func validateSignup(b signupBody) (login, nick, embark, msg string) {
-	login = strings.TrimSpace(b.Login)
+func validateSignup(b signupBody) (nick, embark, msg string) {
 	nick = strings.TrimSpace(b.Nick)
 	embark = strings.TrimSpace(b.EmbarkID)
 
-	if !loginRe.MatchString(login) {
-		return "", "", "", "логин: 3–32 символа, латиница, цифры и подчёркивание"
-	}
-	if len(b.Password) < minPasswordLen {
-		return "", "", "", "пароль должен быть не короче 8 символов"
-	}
-	if len(b.Password) > auth.MaxPasswordBytes {
-		return "", "", "", "пароль слишком длинный (не более 72 байт)"
-	}
-	if strings.EqualFold(strings.TrimSpace(b.Password), login) {
-		return "", "", "", "пароль не должен совпадать с логином"
-	}
 	if n := utf8.RuneCountInString(nick); n < nickMinLen || n > nickMaxLen {
-		return "", "", "", "ник: от 3 до 12 символов"
+		return "", "", "ник: от 3 до 12 символов"
 	}
 	if !nickRe.MatchString(nick) {
-		return "", "", "", "ник: только буквы и цифры, без пробелов и знаков, не начинается с цифры"
+		return "", "", "ник: только буквы и цифры, без пробелов и знаков, не начинается с цифры"
+	}
+	if len(b.Password) < minPasswordLen {
+		return "", "", "пароль должен быть не короче 8 символов"
+	}
+	if len(b.Password) > auth.MaxPasswordBytes {
+		return "", "", "пароль слишком длинный (не более 72 байт)"
+	}
+	if strings.EqualFold(strings.TrimSpace(b.Password), nick) {
+		return "", "", "пароль не должен совпадать с ником"
 	}
 	if !embarkRe.MatchString(embark) {
-		return "", "", "", "Embark ID в формате Ник#1234 (ник, решётка и ровно 4 цифры)"
+		return "", "", "Embark ID в формате Ник#1234 (ник, решётка и ровно 4 цифры)"
 	}
-	return login, nick, embark, ""
+	return nick, embark, ""
 }
 
-// handleSignup - регистрация по логину, паролю, нику и Embark ID. Создаёт обычного игрока,
+// handleSignup - регистрация по нику, паролю и Embark ID. Создаёт обычного игрока,
 // сразу заводит сессию. Роль выше user регистрацией не выдаётся. Лимит по IP считает
 // каждую попытку, чтобы его нельзя было обойти перебором занятых имён.
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +109,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	login, nick, embark, msg := validateSignup(body)
+	nick, embark, msg := validateSignup(body)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -122,11 +123,8 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	s.registerLimiter.inc(ip)
 
-	u, err := s.Store.CreateRegisteredUser(r.Context(), login, nick, embark, hash)
+	u, err := s.Store.CreateRegisteredUser(r.Context(), nick, embark, hash)
 	switch {
-	case errors.Is(err, store.ErrLoginTaken):
-		writeError(w, http.StatusConflict, "логин уже занят")
-		return
 	case errors.Is(err, store.ErrNickTaken):
 		writeError(w, http.StatusConflict, "ник уже занят. "+profileExistsHint)
 		return
@@ -147,9 +145,9 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, u)
 }
 
-// handleLogin — вход по логину/паролю. На неверные данные отвечает одинаково
-// («неверный логин или пароль») и тратит время bcrypt даже при отсутствии пользователя,
-// чтобы не раскрывать существование логина. Троттлинг по IP и по логину против перебора.
+// handleLogin — вход по нику и паролю. На неверные данные отвечает одинаково
+// («неверный ник или пароль») и тратит время bcrypt даже при отсутствии пользователя,
+// чтобы не раскрывать существование ника. Троттлинг по IP и по нику против перебора.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
 	if s.loginIPLimiter.blocked(ip) {
@@ -163,9 +161,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	login := strings.TrimSpace(body.Login)
+	login := body.nick()
 	if login == "" || body.Password == "" {
-		writeError(w, http.StatusBadRequest, "укажите логин и пароль")
+		writeError(w, http.StatusBadRequest, "укажите ник и пароль")
 		return
 	}
 
@@ -177,10 +175,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	id, role, hash, err := s.Store.GetUserAuthByLogin(r.Context(), login)
 	if errors.Is(err, store.ErrNotFound) {
-		// Сравниваем с фиктивным хешем, чтобы время ответа не выдавало отсутствие логина.
+		// Сравниваем с фиктивным хешем, чтобы время ответа не выдавало отсутствие ника.
 		auth.CheckPassword(s.dummyHash, body.Password)
 		s.loginUserLimiter.inc(loginKey)
-		writeError(w, http.StatusUnauthorized, "неверный логин или пароль")
+		writeError(w, http.StatusUnauthorized, "неверный ник или пароль")
 		return
 	}
 	if err != nil {
@@ -189,7 +187,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !auth.CheckPassword(hash, body.Password) {
 		s.loginUserLimiter.inc(loginKey)
-		writeError(w, http.StatusUnauthorized, "неверный логин или пароль")
+		writeError(w, http.StatusUnauthorized, "неверный ник или пароль")
 		return
 	}
 

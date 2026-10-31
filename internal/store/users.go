@@ -49,10 +49,10 @@ var (
 	ErrEmbarkTaken = errors.New("embark id уже занят")
 )
 
-// CreateRegisteredUser заводит аккаунт из формы регистрации. Логин и ник не должны совпадать
-// ни с чьим логином или ником, а Embark ID - с чужим: иначе у игрока, который уже играл
-// (его профиль заведён организатором), появился бы двойник.
-func (s *Store) CreateRegisteredUser(ctx context.Context, login, nick, embark, passwordHash string) (models.User, error) {
+// CreateRegisteredUser заводит аккаунт из формы регистрации. Ник - и логин, и имя на сайте. Он не должен совпадать
+// ни с чьим ником или логином, а Embark ID - с чужим: иначе у игрока, который уже играл (его профиль заведён
+// организатором), появился бы двойник.
+func (s *Store) CreateRegisteredUser(ctx context.Context, nick, embark, passwordHash string) (models.User, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return models.User{}, err
@@ -63,15 +63,9 @@ func (s *Store) CreateRegisteredUser(ctx context.Context, login, nick, embark, p
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('register'))`); err != nil {
 		return models.User{}, err
 	}
-	const nameTaken = `SELECT EXISTS (SELECT 1 FROM users WHERE lower(login) = lower($1) OR lower(display_name) = lower($1))`
 	var taken bool
-	if err := tx.QueryRow(ctx, nameTaken, login).Scan(&taken); err != nil {
-		return models.User{}, err
-	}
-	if taken {
-		return models.User{}, ErrLoginTaken
-	}
-	if err := tx.QueryRow(ctx, nameTaken, nick).Scan(&taken); err != nil {
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM users WHERE lower(login) = lower($1) OR lower(display_name) = lower($1))`, nick).Scan(&taken); err != nil {
 		return models.User{}, err
 	}
 	if taken {
@@ -86,12 +80,12 @@ func (s *Store) CreateRegisteredUser(ctx context.Context, login, nick, embark, p
 	}
 
 	u, err := scanUser(tx.QueryRow(ctx,
-		`INSERT INTO users (login, display_name, password_hash, role, embark_id) VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols,
-		login, nick, passwordHash, string(models.DefaultRole), embark))
+		`INSERT INTO users (login, display_name, password_hash, role, embark_id) VALUES ($1, $1, $2, $3, $4) RETURNING `+userCols,
+		nick, passwordHash, string(models.DefaultRole), embark))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return models.User{}, ErrLoginTaken
+			return models.User{}, ErrNickTaken
 		}
 		return models.User{}, err
 	}
@@ -101,15 +95,36 @@ func (s *Store) CreateRegisteredUser(ctx context.Context, login, nick, embark, p
 	return u, nil
 }
 
-// GetUserAuthByLogin возвращает идентификатор, роль и хеш пароля по логину (без учёта
-// регистра) — для проверки пароля при входе. ErrNotFound, если пользователя нет.
+// GetUserAuthByLogin возвращает идентификатор, роль и хеш пароля по нику (без учёта регистра) - для проверки пароля
+// при входе. Ник ищется среди логинов, а если такого логина нет - среди имён на сайте: у старых аккаунтов логин
+// мог отличаться от имени. Имя подходит, только если оно одно на всех: при совпадении у двоих вход по нему закрыт.
+// ErrNotFound, если пользователя нет.
 func (s *Store) GetUserAuthByLogin(ctx context.Context, login string) (id string, role models.Role, passwordHash string, err error) {
 	var r string
 	err = s.Pool.QueryRow(ctx,
 		`SELECT id, role, password_hash FROM users WHERE lower(login) = lower($1)`, login).
 		Scan(&id, &r, &passwordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", "", ErrNotFound
+		rows, qerr := s.Pool.Query(ctx,
+			`SELECT id, role, password_hash FROM users WHERE lower(display_name) = lower($1) LIMIT 2`, login)
+		if qerr != nil {
+			return "", "", "", qerr
+		}
+		defer rows.Close()
+		found := 0
+		for rows.Next() {
+			found++
+			if err := rows.Scan(&id, &r, &passwordHash); err != nil {
+				return "", "", "", err
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return "", "", "", err
+		}
+		if found != 1 {
+			return "", "", "", ErrNotFound
+		}
+		return id, models.Role(r), passwordHash, nil
 	}
 	if err != nil {
 		return "", "", "", err
