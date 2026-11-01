@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const taskCols = `id, text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active`
+const taskCols = `id, text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active, format, rarity, round_type`
 
 // taskMaps - карты задания из параметра $n без несуществующих и повторов, в порядке карт на сайте.
 func taskMaps(n int) string {
@@ -18,7 +18,7 @@ func taskMaps(n int) string {
 func scanTask(row pgx.Row) (models.CatalogTask, error) {
 	var t models.CatalogTask
 	err := row.Scan(&t.ID, &t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Source, &t.Author, &t.Title,
-		&t.Name, &t.Category, &t.Tag, &t.MapCodes, &t.Active)
+		&t.Name, &t.Category, &t.Tag, &t.MapCodes, &t.Active, &t.Format, &t.Rarity, &t.RoundType)
 	return t, err
 }
 
@@ -43,24 +43,87 @@ func (s *Store) ListCatalogTasks(ctx context.Context) ([]models.CatalogTask, err
 	return out, rows.Err()
 }
 
-func (s *Store) CreateCatalogTask(ctx context.Context, t models.CatalogTask) (models.CatalogTask, error) {
-	q := `
-		INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active, sort_order)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ` + taskMaps(11) + `, $12, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
-		RETURNING ` + taskCols
-	return scanTask(s.Pool.QueryRow(ctx, q, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author, t.Title,
-		t.Name, t.Category, t.Tag, t.MapCodes, t.Active))
+var insertTaskSQL = `
+	INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active,
+	                           format, rarity, round_type, sort_order)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ` + taskMaps(11) + `, $12,
+	        $13, $14, $15, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
+	RETURNING ` + taskCols
+
+// taskDuplicateSQL - в каталоге уже есть такое же задание: то же название и описание, раздел, пул и формат.
+const taskDuplicateSQL = `
+	SELECT EXISTS(SELECT 1 FROM catalog_tasks
+	WHERE lower(btrim(name)) = lower(btrim($1)) AND lower(btrim(text)) = lower(btrim($2))
+	  AND category = $3 AND kind = $4 AND format = $5)`
+
+// withTaskDefaults заменяет пустую классификацию умолчаниями: так задание из любого места кода
+// попадает в базу корректным, а не падает на ограничениях таблицы.
+func withTaskDefaults(t models.CatalogTask) models.CatalogTask {
+	if t.Format == "" {
+		t.Format = models.TaskFormatAny
+	}
+	if t.Rarity == "" {
+		t.Rarity = models.RarityCommon
+	}
+	if t.RoundType == "" {
+		t.RoundType = models.RoundTypeAny
+	}
+	if t.Tag == "" {
+		t.Tag = models.TaskTagNormal
+	}
+	return t
+}
+
+// CatalogTaskResult - итог добавления одного задания из пачки: созданное задание или причина отказа.
+type CatalogTaskResult struct {
+	Task      *models.CatalogTask
+	Duplicate bool // такое задание уже есть в каталоге или выше в этой же пачке
+}
+
+// CreateCatalogTasks добавляет задания одной транзакцией: единственный путь создания, им пользуются
+// и одиночное добавление, и вставка списком. Дубли пропускаются и помечаются в результате.
+func (s *Store) CreateCatalogTasks(ctx context.Context, tasks []models.CatalogTask) ([]CatalogTaskResult, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	out := make([]CatalogTaskResult, 0, len(tasks))
+	for _, t := range tasks {
+		t = withTaskDefaults(t)
+		var dup bool
+		if err := tx.QueryRow(ctx, taskDuplicateSQL, t.Name, t.Text, t.Category, t.Kind, t.Format).Scan(&dup); err != nil {
+			return nil, err
+		}
+		if dup {
+			out = append(out, CatalogTaskResult{Duplicate: true})
+			continue
+		}
+		created, err := scanTask(tx.QueryRow(ctx, insertTaskSQL, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author,
+			t.Title, t.Name, t.Category, t.Tag, t.MapCodes, t.Active, t.Format, t.Rarity, t.RoundType))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CatalogTaskResult{Task: &created})
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) UpdateCatalogTask(ctx context.Context, id string, t models.CatalogTask) (models.CatalogTask, error) {
+	t = withTaskDefaults(t)
 	q := `
 		UPDATE catalog_tasks
 		SET text = $2, points = $3, value_type = $4, kind = $5, source = $6, author = $7, title = $8,
-		    name = $9, category = $10, tag = $11, map_codes = ` + taskMaps(12) + `, active = $13
+		    name = $9, category = $10, tag = $11, map_codes = ` + taskMaps(12) + `, active = $13,
+		    format = $14, rarity = $15, round_type = $16
 		WHERE id = $1
 		RETURNING ` + taskCols
 	return scanTask(s.Pool.QueryRow(ctx, q, id, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author, t.Title,
-		t.Name, t.Category, t.Tag, t.MapCodes, t.Active))
+		t.Name, t.Category, t.Tag, t.MapCodes, t.Active, t.Format, t.Rarity, t.RoundType))
 }
 
 // DeleteCatalogTask удаляет задание. Если оно уже выдавалось в матчах, удалить нельзя (иначе

@@ -343,11 +343,11 @@ type taskSlot struct {
 // DealRoundTasks выдаёт каждой стороне на раунд задание, задание на карту раунда и протокол из
 // пула под тип игроков; повторов в матче нет. Если на карту заданий нет, выдаётся ещё одно общее.
 func (s *Store) DealRoundTasks(ctx context.Context, roundID string) error {
-	var tournamentID, playerType, mapCode string
+	var tournamentID, mapCode string
 	if err := s.Pool.QueryRow(ctx, `
-		SELECT r.tournament_id, t.player_type, COALESCE(r.map_code, '')
-		FROM rounds r JOIN tournaments t ON t.id = r.tournament_id WHERE r.id = $1`, roundID).
-		Scan(&tournamentID, &playerType, &mapCode); err != nil {
+		SELECT r.tournament_id, COALESCE(r.map_code, '')
+		FROM rounds r WHERE r.id = $1`, roundID).
+		Scan(&tournamentID, &mapCode); err != nil {
 		return err
 	}
 	var dealt bool
@@ -365,9 +365,9 @@ func (s *Store) DealRoundTasks(ctx context.Context, roundID string) error {
 	slots := []taskSlot{{"task", false}, {"task", true}, {"protocol", false}}
 	for _, p := range parts {
 		for _, sl := range slots {
-			id, err := s.pickTask(ctx, tournamentID, playerType, sl, mapCode, "")
+			id, err := s.pickTask(ctx, roundID, sl, mapCode, "")
 			if errors.Is(err, ErrNotFound) && sl.onMap {
-				id, err = s.pickTask(ctx, tournamentID, playerType, taskSlot{"task", false}, "", "")
+				id, err = s.pickTask(ctx, roundID, taskSlot{"task", false}, "", "")
 			}
 			if errors.Is(err, ErrNotFound) {
 				continue
@@ -385,20 +385,29 @@ func (s *Store) DealRoundTasks(ctx context.Context, roundID string) error {
 	return nil
 }
 
+// taskFitsRound - задание подходит матчу и раунду: формат матча (1x1/2x2) и тип раунда. Бесплатный
+// раунд - первый раунд обычного матча (все на бесплатном наборе), остальные - платные, на своём.
+// Ждёт в запросе алиасы ct (задание), r (раунд), t (турнир).
+const taskFitsRound = `
+	(ct.format = 'any' OR ct.format = t.mode)
+	AND (ct.round_type = 'any'
+	     OR (ct.round_type = 'free') = (r.number = 1 AND t.format = 'match'))`
+
 // pickTask - случайное действующее задание нужного вида, ещё не выданное в этом матче.
-func (s *Store) pickTask(ctx context.Context, tournamentID, playerType string, sl taskSlot, mapCode, except string) (string, error) {
+func (s *Store) pickTask(ctx context.Context, roundID string, sl taskSlot, mapCode, except string) (string, error) {
 	var id string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT ct.id FROM catalog_tasks ct
-		WHERE ct.active AND ct.category = $3
-		  AND ($2 = 'pvpve' OR ct.kind = $2 OR ct.kind = 'pvpve')
-		  AND (($4 = '' AND cardinality(ct.map_codes) = 0) OR $4 = ANY(ct.map_codes))
-		  AND ct.id <> $5
+		SELECT ct.id FROM catalog_tasks ct, rounds r JOIN tournaments t ON t.id = r.tournament_id
+		WHERE r.id = $1 AND ct.active AND ct.category = $2
+		  AND (t.player_type = 'pvpve' OR ct.kind = t.player_type OR ct.kind = 'pvpve')
+		  AND (($3 = '' AND cardinality(ct.map_codes) = 0) OR $3 = ANY(ct.map_codes))
+		  AND ct.id <> $4
+		  AND `+taskFitsRound+`
 		  AND ct.id NOT IN (
-		      SELECT rbt.task_id FROM round_bonus_tasks rbt JOIN rounds r ON r.id = rbt.round_id
-		      WHERE r.tournament_id = $1)
+		      SELECT rbt.task_id FROM round_bonus_tasks rbt JOIN rounds r2 ON r2.id = rbt.round_id
+		      WHERE r2.tournament_id = t.id)
 		ORDER BY random() LIMIT 1`,
-		tournamentID, playerType, sl.category, mapForSlot(sl, mapCode), except).Scan(&id)
+		roundID, sl.category, mapForSlot(sl, mapCode), except).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	}
@@ -414,18 +423,18 @@ func mapForSlot(sl taskSlot, mapCode string) string {
 
 // RerollTask меняет невыполненное задание на другое того же вида (выпало невыполнимое).
 func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
-	var tournamentID, playerType, taskID, category, roundMap string
+	var roundID, taskID, category, roundMap string
 	var onMap bool
 	var completed *string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT r.tournament_id, t.player_type, rbt.task_id, ct.category, cardinality(ct.map_codes) > 0,
+		SELECT r.id, rbt.task_id, ct.category, cardinality(ct.map_codes) > 0,
 		       COALESCE(r.map_code, ''), rbt.completed_by
 		FROM round_bonus_tasks rbt
 		JOIN rounds r ON r.id = rbt.round_id
 		JOIN tournaments t ON t.id = r.tournament_id
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		WHERE rbt.id = $1`, assignmentID).
-		Scan(&tournamentID, &playerType, &taskID, &category, &onMap, &roundMap, &completed)
+		Scan(&roundID, &taskID, &category, &onMap, &roundMap, &completed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -436,7 +445,7 @@ func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
 		return ErrConflict
 	}
 	sl := taskSlot{category: category, onMap: onMap}
-	next, err := s.pickTask(ctx, tournamentID, playerType, sl, roundMap, taskID)
+	next, err := s.pickTask(ctx, roundID, sl, roundMap, taskID)
 	if err != nil {
 		return err
 	}

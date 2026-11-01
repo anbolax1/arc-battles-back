@@ -95,6 +95,7 @@ func (s *Store) DealContracts(ctx context.Context, roundID, participantID string
 		JOIN tournaments t ON t.id = r.tournament_id
 		WHERE ct.active AND ct.category = 'task'
 		  AND (t.player_type = 'pvpve' OR ct.kind = t.player_type OR ct.kind = 'pvpve')
+		  AND `+taskFitsRound+`
 		  AND ct.id NOT IN (
 		      SELECT rbt.task_id FROM round_bonus_tasks rbt
 		      JOIN rounds r2 ON r2.id = rbt.round_id

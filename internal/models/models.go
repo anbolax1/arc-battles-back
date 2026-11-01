@@ -827,7 +827,40 @@ type CatalogTask struct {
 	Tag       string   `json:"tag"`            // normal | timed
 	MapCodes  []string `json:"mapCodes"`       // карты задания; пусто - общее, на любую карту
 	Active    bool     `json:"active"`         // выключенные не раздаются, но остаются в истории
+	Format    string   `json:"format"`         // any | 1x1 | 2x2 - в матчах какого формата раздаётся
+	Rarity    string   `json:"rarity"`         // common | uncommon | rare | epic | legendary
+	RoundType string   `json:"roundType"`      // any | free | paid - на каком наборе играется раунд
 }
+
+// Формат матча, для которого задание.
+const (
+	TaskFormatAny = "any" // оба формата
+	TaskFormat1x1 = "1x1"
+	TaskFormat2x2 = "2x2"
+)
+
+// Редкость задания, от обычного к легендарному.
+const (
+	RarityCommon    = "common"
+	RarityUncommon  = "uncommon"
+	RarityRare      = "rare"
+	RarityEpic      = "epic"
+	RarityLegendary = "legendary"
+)
+
+// Тип раунда: бесплатный - выдаётся бесплатное снаряжение, платный - свой билд.
+const (
+	RoundTypeAny  = "any"
+	RoundTypeFree = "free"
+	RoundTypePaid = "paid"
+)
+
+// Допустимые значения классификации задания; пустое значение при создании означает умолчание.
+var (
+	TaskFormats    = []string{TaskFormatAny, TaskFormat1x1, TaskFormat2x2}
+	TaskRarities   = []string{RarityCommon, RarityUncommon, RarityRare, RarityEpic, RarityLegendary}
+	TaskRoundTypes = []string{RoundTypeAny, RoundTypeFree, RoundTypePaid}
+)
 
 // Тег задания на экране.
 const (

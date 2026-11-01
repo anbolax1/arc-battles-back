@@ -46,6 +46,9 @@ type taskBody struct {
 	Tag       string   `json:"tag"`
 	MapCodes  []string `json:"mapCodes"`
 	Active    *bool    `json:"active"`
+	Format    string   `json:"format"`
+	Rarity    string   `json:"rarity"`
+	RoundType string   `json:"roundType"`
 }
 
 // taskTag - тег задания; без тега протокол на время (его выполняют до 15-й минуты), остальные обычные.
@@ -59,21 +62,54 @@ func taskTag(tag, category string) string {
 	return models.TaskTagNormal
 }
 
-func (b taskBody) toModel() (models.CatalogTask, string, bool) {
+// Баллы по умолчанию: обычное задание - 2, задание на время и протокол - 1 (награды 3 сезона).
+// Редкость на баллы не влияет.
+const (
+	defaultTaskPoints  = 2
+	defaultTimedPoints = 1
+)
+
+// classValue возвращает значение классификации; пустое - умолчание, незнакомое - ошибка.
+func classValue(name, v, def string, allowed []string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return def, nil
+	}
+	for _, a := range allowed {
+		if v == a {
+			return v, nil
+		}
+	}
+	return "", fmt.Errorf("%s: недопустимое значение «%s»", name, v)
+}
+
+func (b taskBody) toModel() (models.CatalogTask, error) {
 	vt, ok := validValue(b.ValueType, b.Points)
 	if !ok {
-		return models.CatalogTask{}, "", false
+		return models.CatalogTask{}, errors.New("valueType должен быть fixed или percent (процент 0..100)")
+	}
+	format, err := classValue("format", b.Format, models.TaskFormatAny, models.TaskFormats)
+	if err != nil {
+		return models.CatalogTask{}, err
+	}
+	rarity, err := classValue("rarity", b.Rarity, models.RarityCommon, models.TaskRarities)
+	if err != nil {
+		return models.CatalogTask{}, err
+	}
+	roundType, err := classValue("roundType", b.RoundType, models.RoundTypeAny, models.TaskRoundTypes)
+	if err != nil {
+		return models.CatalogTask{}, err
 	}
 	category := "task"
 	if b.Category == "protocol" {
 		category = "protocol"
 	}
+	tag := taskTag(b.Tag, category)
 	points := b.Points
 	if points == 0 {
-		// Награды 3 сезона: задание - 2 балла, протокол - 1.
-		points = 2
-		if category == "protocol" {
-			points = 1
+		points = defaultTaskPoints
+		if tag == models.TaskTagTimed || category == "protocol" {
+			points = defaultTimedPoints
 		}
 	}
 	active := true
@@ -90,10 +126,25 @@ func (b taskBody) toModel() (models.CatalogTask, string, bool) {
 		Title:     strings.TrimSpace(b.Title),
 		Name:      strings.Trim(strings.TrimSpace(b.Name), "«»"),
 		Category:  category,
-		Tag:       taskTag(b.Tag, category),
+		Tag:       tag,
 		MapCodes:  b.MapCodes,
 		Active:    active,
-	}, vt, true
+		Format:    format,
+		Rarity:    rarity,
+		RoundType: roundType,
+	}, nil
+}
+
+// parseTask - задание из тела запроса; без текста его нет.
+func (b taskBody) parseTask() (models.CatalogTask, error) {
+	t, err := b.toModel()
+	if err != nil {
+		return t, err
+	}
+	if t.Text == "" {
+		return t, errors.New("укажите текст задания")
+	}
+	return t, nil
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
@@ -102,21 +153,21 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	t, _, ok := b.toModel()
-	if t.Text == "" {
-		writeError(w, http.StatusBadRequest, "укажите текст задания")
+	t, err := b.parseTask()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !ok {
-		writeError(w, http.StatusBadRequest, "valueType должен быть fixed или percent (процент 0..100)")
-		return
-	}
-	created, err := s.Store.CreateCatalogTask(r.Context(), t)
+	res, err := s.Store.CreateCatalogTasks(r.Context(), []models.CatalogTask{t})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, created)
+	if res[0].Duplicate {
+		writeError(w, http.StatusConflict, "такое задание уже есть: то же название, описание, пул и формат")
+		return
+	}
+	writeJSON(w, http.StatusCreated, res[0].Task)
 }
 
 func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
@@ -125,13 +176,9 @@ func (s *Server) handleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	t, _, ok := b.toModel()
-	if t.Text == "" {
-		writeError(w, http.StatusBadRequest, "укажите текст задания")
-		return
-	}
-	if !ok {
-		writeError(w, http.StatusBadRequest, "valueType должен быть fixed или percent (процент 0..100)")
+	t, err := b.parseTask()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	updated, err := s.Store.UpdateCatalogTask(r.Context(), chi.URLParam(r, "id"), t)
@@ -154,7 +201,17 @@ func (s *Server) handleDeleteTask(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/catalog/tasks/bulk {items: [...]} - добавить пачку заданий разом (вставка списка из таблицы).
+// Сколько заданий можно добавить за один раз.
+const maxBulkTasks = 500
+
+// bulkSkip - строка пачки, которая не добавлена, и почему.
+type bulkSkip struct {
+	Index  int    `json:"index"` // номер строки в присланном списке, с 0
+	Reason string `json:"reason"`
+}
+
+// POST /api/catalog/tasks/bulk {items: [...]} - вставка списком: общие настройки приходят в каждом
+// элементе. Строки с ошибкой и дубли пропускаются с причиной, остальные добавляются одной транзакцией.
 func (s *Server) handleBulkCreateTasks(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Items []taskBody `json:"items"`
@@ -163,25 +220,38 @@ func (s *Server) handleBulkCreateTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
 		return
 	}
-	if len(body.Items) == 0 || len(body.Items) > 500 {
-		writeError(w, http.StatusBadRequest, "нужно от 1 до 500 заданий")
+	if len(body.Items) == 0 || len(body.Items) > maxBulkTasks {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("нужно от 1 до %d заданий", maxBulkTasks))
 		return
 	}
-	out := make([]models.CatalogTask, 0, len(body.Items))
+	skipped := []bulkSkip{}
+	valid := make([]models.CatalogTask, 0, len(body.Items))
+	index := make([]int, 0, len(body.Items)) // номер строки для каждого корректного задания
 	for i, b := range body.Items {
-		t, _, ok := b.toModel()
-		if t.Text == "" || !ok {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("строка %d: нужен текст задания", i+1))
-			return
+		t, err := b.parseTask()
+		if err != nil {
+			skipped = append(skipped, bulkSkip{Index: i, Reason: err.Error()})
+			continue
 		}
-		created, err := s.Store.CreateCatalogTask(r.Context(), t)
+		valid = append(valid, t)
+		index = append(index, i)
+	}
+	created := []models.CatalogTask{}
+	if len(valid) > 0 {
+		res, err := s.Store.CreateCatalogTasks(r.Context(), valid)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		out = append(out, created)
+		for i, rr := range res {
+			if rr.Duplicate {
+				skipped = append(skipped, bulkSkip{Index: index[i], Reason: "такое задание уже есть"})
+				continue
+			}
+			created = append(created, *rr.Task)
+		}
 	}
-	writeJSON(w, http.StatusCreated, out)
+	writeJSON(w, http.StatusCreated, map[string]any{"created": created, "skipped": skipped})
 }
 
 // ---- Усложнения ----

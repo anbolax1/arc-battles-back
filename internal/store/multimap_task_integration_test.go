@@ -50,7 +50,7 @@ func TestMultiMapTaskIntegration(t *testing.T) {
 			t.Fatalf("карта %s: %v", code, err)
 		}
 	}
-	task, err := st.CreateCatalogTask(ctx, models.CatalogTask{
+	task, err := createTask(ctx, st, models.CatalogTask{
 		Name: fmt.Sprintf("mm-%d", uniq), Text: "Одно задание на две карты.", Points: 2, ValueType: models.ValueFixed,
 		Kind: "pvpve", Source: "official", Category: "task", MapCodes: []string{maps[1], "no_such_map", maps[0], maps[1]}, Active: true,
 	})
