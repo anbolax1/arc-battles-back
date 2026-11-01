@@ -129,6 +129,28 @@ func (s *Server) handleDecideStatClaim(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// PUT /api/me/task-rarities {rarities} - какие по редкости задания игрок хочет получать в матчах.
+func (s *Server) handleSaveTaskRarities(w http.ResponseWriter, r *http.Request) {
+	u, _ := userFrom(r.Context())
+	var body struct {
+		Rarities []string `json:"rarities"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	saved, err := s.Store.SaveUserTaskRarities(r.Context(), u.ID, body.Rarities)
+	if errors.Is(err, store.ErrBadRarities) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rarities": saved})
+}
+
 // GET /api/favorites/options - из чего выбирать любимое (публично: списки одинаковые для всех).
 func (s *Server) handleFavoriteOptions(w http.ResponseWriter, r *http.Request) {
 	opts, err := s.Store.FavoriteOptions(r.Context())
@@ -228,7 +250,13 @@ func (s *Server) handleMyExtras(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	rarities, err := s.Store.GetUserTaskRarities(ctx, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	out := models.MyExtras{
+		TaskRarities: rarities,
 		Claims:       claims,
 		Server:       server,
 		Favorites:    fav,

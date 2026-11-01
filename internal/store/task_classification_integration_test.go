@@ -41,6 +41,8 @@ func TestTaskClassificationIntegration(t *testing.T) {
 	}
 	defer pool.Close()
 	st := store.New(pool)
+	// Формат и тип раунда проверяются на заданиях карты: в слот карты попадает единственное задание.
+	defer store.SetMapTasksEnabled(true)()
 
 	uniq := time.Now().UnixNano()
 	prefix := fmt.Sprintf("cls-%d", uniq)
@@ -55,8 +57,8 @@ func TestTaskClassificationIntegration(t *testing.T) {
 	// Старая строка без новых колонок получает умолчания: раздаётся как раньше.
 	var legacyID string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO catalog_tasks (name, text, points, kind, category, active)
-		VALUES ($1, 'старое', 2, 'pvpve', 'task', false) RETURNING id`, prefix+"-legacy").Scan(&legacyID); err != nil {
+		INSERT INTO catalog_tasks (name, text, points, kind, active)
+		VALUES ($1, 'старое', 2, 'pvpve', false) RETURNING id`, prefix+"-legacy").Scan(&legacyID); err != nil {
 		t.Fatalf("старая строка: %v", err)
 	}
 	var f, r, rt, tag string
@@ -71,7 +73,7 @@ func TestTaskClassificationIntegration(t *testing.T) {
 	mk := func(name string) models.CatalogTask {
 		return models.CatalogTask{
 			Name: prefix + name, Text: "Описание " + name, Points: 1, ValueType: models.ValueFixed, Kind: "pvp",
-			Source: "official", Category: "task", Tag: models.TaskTagTimed, Active: true,
+			Source: "official", Tag: models.TaskTagTimed, Active: true,
 			Format: models.TaskFormat2x2, Rarity: models.RarityLegendary, RoundType: models.RoundTypePaid,
 		}
 	}
@@ -109,7 +111,7 @@ func TestTaskClassificationIntegration(t *testing.T) {
 		name := fmt.Sprintf("%s-%s-%s-%s-%s-%d", prefix, taskFormat, roundType, matchMode, matchFormat, roundNumber)
 		created, err := createTask(ctx, st, models.CatalogTask{
 			Name: name, Text: "Проверка " + name, Points: 2, ValueType: models.ValueFixed, Kind: "pvp",
-			Source: "official", Category: "task", Active: true, Format: taskFormat, Rarity: models.RarityCommon,
+			Source: "official", Active: true, Format: taskFormat, Rarity: models.RarityCommon,
 			RoundType: roundType, MapCodes: []string{code},
 		})
 		if err != nil {

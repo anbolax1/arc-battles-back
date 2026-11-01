@@ -29,6 +29,7 @@ func TestMultiMapTaskIntegration(t *testing.T) {
 	}
 	defer pool.Close()
 	st := store.New(pool)
+	defer store.SetMapTasksEnabled(true)()
 
 	// Свои карты без других заданий: в слот карты может выпасть только это задание. Карты выключены,
 	// чтобы не попасть в пики-баны.
@@ -52,7 +53,7 @@ func TestMultiMapTaskIntegration(t *testing.T) {
 	}
 	task, err := createTask(ctx, st, models.CatalogTask{
 		Name: fmt.Sprintf("mm-%d", uniq), Text: "Одно задание на две карты.", Points: 2, ValueType: models.ValueFixed,
-		Kind: "pvpve", Source: "official", Category: "task", MapCodes: []string{maps[1], "no_such_map", maps[0], maps[1]}, Active: true,
+		Kind: "pvpve", Source: "official", MapCodes: []string{maps[1], "no_such_map", maps[0], maps[1]}, Active: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateCatalogTask: %v", err)

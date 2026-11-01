@@ -11,7 +11,7 @@ import (
 // Контракты (бывш. бонусные задания). Владелец контракта = participant_id (кому выдан).
 // completed_by — кто фактически выполнил: владелец → +2 балла, противник → +1 балл, NULL → не выполнен.
 const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, ct.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
-	rbt.completed_user_id, ct.name, ct.category, ct.tag, ` + dealtTaskMap
+	rbt.completed_user_id, ct.name, ct.tag, ct.rarity, ` + dealtTaskMap
 
 // dealtTaskMap - карта выданного задания: у задания на картах это карта раунда, у общего - пусто.
 const dealtTaskMap = `CASE WHEN cardinality(ct.map_codes) > 0 THEN COALESCE(r.map_code, '') ELSE '' END`
@@ -20,7 +20,7 @@ func scanRoundBonusTask(row pgx.Row) (models.RoundBonusTask, error) {
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.CompletedUser, &t.Name, &t.Category, &t.Tag, &t.MapCode)
+		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode)
 	return t, err
 }
 
@@ -32,7 +32,7 @@ func (s *Store) ListTournamentBonusTasks(ctx context.Context, tournamentID strin
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		JOIN rounds r ON r.id = rbt.round_id
 		WHERE r.tournament_id = $1
-		ORDER BY r.number, rbt.participant_id, ct.category, cardinality(ct.map_codes) > 0, ct.text`, tournamentID)
+		ORDER BY r.number, rbt.participant_id, (ct.tag <> 'timed'), cardinality(ct.map_codes) > 0, ct.text`, tournamentID)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (s *Store) DealContracts(ctx context.Context, roundID, participantID string
 		FROM catalog_tasks ct
 		JOIN rounds r ON r.id = $1
 		JOIN tournaments t ON t.id = r.tournament_id
-		WHERE ct.active AND ct.category = 'task'
+		WHERE ct.active AND ct.tag = 'normal'
 		  AND (t.player_type = 'pvpve' OR ct.kind = t.player_type OR ct.kind = 'pvpve')
 		  AND `+taskFitsRound+`
 		  AND ct.id NOT IN (
@@ -168,15 +168,15 @@ func (s *Store) MarkContract(ctx context.Context, id, by string) ([]string, erro
 	return res.Affected, err
 }
 
-// MarkTask - отметка исполнителя задания. Протокол засчитывается только владельцу. userID - игрок команды 2×2,
+// MarkTask - отметка исполнителя задания. Задание на время засчитывается только владельцу. userID - игрок команды 2×2,
 // которому засчитано задание; у стороны из одного игрока пусто.
 func (s *Store) MarkTask(ctx context.Context, id, by, userID string) (MarkResult, error) {
 	var res MarkResult
-	var category string
+	var tag string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT rbt.round_id, rbt.participant_id, rbt.completed_by, rbt.completed_user_id, ct.category
+		SELECT rbt.round_id, rbt.participant_id, rbt.completed_by, rbt.completed_user_id, ct.tag
 		FROM round_bonus_tasks rbt JOIN catalog_tasks ct ON ct.id = rbt.task_id
-		WHERE rbt.id = $1`, id).Scan(&res.RoundID, &res.Owner, &res.Prev, &res.PrevUser, &category)
+		WHERE rbt.id = $1`, id).Scan(&res.RoundID, &res.Owner, &res.Prev, &res.PrevUser, &tag)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return res, ErrNotFound
 	}
@@ -192,9 +192,9 @@ func (s *Store) MarkTask(ctx context.Context, id, by, userID string) (MarkResult
 		// Зачёт владельцем имеет приоритет: ставится всегда и отменяет балл противника (перетирает completed_by).
 		res.Target = &res.Owner
 	case "opponent":
-		// Протокол - личное задание, противнику его не засчитать. Задание засчитывается противнику,
+		// Задание на время - личное, противнику его не засчитать. Обычное засчитывается противнику,
 		// ТОЛЬКО если владелец сам его не выполнил (иначе красть нечего).
-		if category == "protocol" || (res.Prev != nil && *res.Prev == res.Owner) {
+		if tag == models.TaskTagTimed || (res.Prev != nil && *res.Prev == res.Owner) {
 			return res, ErrConflict
 		}
 		opp, err := s.OpponentParticipant(ctx, res.RoundID, res.Owner)
@@ -269,7 +269,7 @@ func (s *Store) GetBonusAssignment(ctx context.Context, id string) (models.Round
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.CompletedUser, &t.Name, &t.Category, &t.Tag, &t.MapCode, &tournamentID)
+		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &tournamentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, "", ErrNotFound
 	}

@@ -42,7 +42,7 @@ type taskBody struct {
 	Author    string   `json:"author"`
 	Title     string   `json:"title"`
 	Name      string   `json:"name"`
-	Category  string   `json:"category"`
+	Category  string   `json:"category"` // старое поле: protocol означает задание на время
 	Tag       string   `json:"tag"`
 	MapCodes  []string `json:"mapCodes"`
 	Active    *bool    `json:"active"`
@@ -51,7 +51,7 @@ type taskBody struct {
 	RoundType string   `json:"roundType"`
 }
 
-// taskTag - тег задания; без тега протокол на время (его выполняют до 15-й минуты), остальные обычные.
+// taskTag - тег задания; старый клиент присылает протокол как category=protocol - это задание на время.
 func taskTag(tag, category string) string {
 	if tag == models.TaskTagNormal || tag == models.TaskTagTimed {
 		return tag
@@ -62,7 +62,7 @@ func taskTag(tag, category string) string {
 	return models.TaskTagNormal
 }
 
-// Баллы по умолчанию: обычное задание - 2, задание на время и протокол - 1 (награды 3 сезона).
+// Баллы по умолчанию: обычное задание - 2, задание на время - 1 (награды 3 сезона).
 // Редкость на баллы не влияет.
 const (
 	defaultTaskPoints  = 2
@@ -100,15 +100,11 @@ func (b taskBody) toModel() (models.CatalogTask, error) {
 	if err != nil {
 		return models.CatalogTask{}, err
 	}
-	category := "task"
-	if b.Category == "protocol" {
-		category = "protocol"
-	}
-	tag := taskTag(b.Tag, category)
+	tag := taskTag(b.Tag, b.Category)
 	points := b.Points
 	if points == 0 {
 		points = defaultTaskPoints
-		if tag == models.TaskTagTimed || category == "protocol" {
+		if tag == models.TaskTagTimed {
 			points = defaultTimedPoints
 		}
 	}
@@ -125,7 +121,6 @@ func (b taskBody) toModel() (models.CatalogTask, error) {
 		Author:    strings.TrimSpace(b.Author),
 		Title:     strings.TrimSpace(b.Title),
 		Name:      strings.Trim(strings.TrimSpace(b.Name), "«»"),
-		Category:  category,
 		Tag:       tag,
 		MapCodes:  b.MapCodes,
 		Active:    active,

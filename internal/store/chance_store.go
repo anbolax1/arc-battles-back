@@ -74,9 +74,9 @@ func chanceKit(format string, number int) int {
 	return kitOwn
 }
 
-func chanceTaskKind(category string, onMap bool) int {
+func chanceTaskKind(timed bool, onMap bool) int {
 	switch {
-	case category == "protocol":
+	case timed:
 		return taskProtocol
 	case onMap:
 		return taskOnMap
@@ -218,7 +218,7 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 
 	// Задания: своё выполненное - очки из каталога, выполненное соперником - балл ему.
 	rows, err = s.Pool.Query(ctx, `
-		SELECT b.round_id, b.participant_id, COALESCE(b.completed_by, ''), ct.category, cardinality(ct.map_codes) > 0, ct.points
+		SELECT b.round_id, b.participant_id, COALESCE(b.completed_by, ''), ct.tag = 'timed', cardinality(ct.map_codes) > 0, ct.points
 		FROM round_bonus_tasks b JOIN rounds r ON r.id = b.round_id JOIN tournaments t ON t.id = r.tournament_id
 		JOIN catalog_tasks ct ON ct.id = b.task_id
 		WHERE `+scope+`
@@ -227,10 +227,10 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 		return nil, err
 	}
 	for rows.Next() {
-		var rid, owner, doneBy, category string
-		var onMap bool
+		var rid, owner, doneBy string
+		var timed, onMap bool
 		var points int
-		if err := rows.Scan(&rid, &owner, &doneBy, &category, &onMap, &points); err != nil {
+		if err := rows.Scan(&rid, &owner, &doneBy, &timed, &onMap, &points); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -241,7 +241,7 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 		}
 		rd := &recs[ref.match].Rounds[ref.round]
 		done := doneBy == owner
-		rd.Raids[so.side].Tasks = append(rd.Raids[so.side].Tasks, chanceTaskRec{Kind: chanceTaskKind(category, onMap), Done: done})
+		rd.Raids[so.side].Tasks = append(rd.Raids[so.side].Tasks, chanceTaskRec{Kind: chanceTaskKind(timed, onMap), Done: done})
 		if done {
 			rd.Raids[so.side].Points += points
 		} else if sd, ok := sides[doneBy]; ok && sd.match == ref.match {
@@ -636,7 +636,7 @@ func liveChance(st models.MatchState, parts [2]models.Participant, setup matchSe
 				raid := &liveRaid{params: params, knocks: max(0, x.knocks)}
 				own := 0
 				for _, task := range x.tasks {
-					kind := chanceTaskKind(task.Category, task.MapCode != "")
+					kind := chanceTaskKind(task.Tag == models.TaskTagTimed, task.MapCode != "")
 					p := params.Rates[kind]
 					if task.CompletedBy != nil && *task.CompletedBy == task.ParticipantID {
 						p = 1

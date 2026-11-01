@@ -67,7 +67,7 @@ func (s *Store) MatchChanceTrail(ctx context.Context, st models.MatchState, focu
 	tasks := map[string]*trailTask{}
 	for _, task := range st.Tasks {
 		if i, ok := sideOf[task.ParticipantID]; ok {
-			tasks[task.ID] = &trailTask{round: task.RoundNumber, side: i, kind: chanceTaskKind(task.Category, task.MapCode != ""), points: task.Points}
+			tasks[task.ID] = &trailTask{round: task.RoundNumber, side: i, kind: chanceTaskKind(task.Tag == models.TaskTagTimed, task.MapCode != ""), points: task.Points}
 		}
 	}
 

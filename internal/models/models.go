@@ -282,6 +282,8 @@ type MatchPlayer struct {
 	IsPlaceholder bool   `json:"isPlaceholder"`
 	PrevGames     int    `json:"prevGames"`          // матчей в прошлых сезонах: при равном MMR сторона A - у кого меньше
 	Priority      bool   `json:"priority,omitempty"` // сегодня играет без очереди
+	// Редкости заданий, которые игрок хочет получать (из профиля).
+	TaskRarities []string `json:"taskRarities"`
 }
 
 // MatchTeam - команда 2×2 из списка организатора: для выбора стороны матча. MMR и счёт - в текущем сезоне.
@@ -672,6 +674,7 @@ type MyExtras struct {
 	ResetBlocked string          `json:"resetBlocked,omitempty"` // почему сейчас не сбросить рейтинг
 	Mmr          int             `json:"mmr"`                    // MMR 1×1 в текущем сезоне
 	StartMmr     int             `json:"startMmr"`
+	TaskRarities []string        `json:"taskRarities"` // какие по редкости задания игрок хочет получать
 }
 
 // SeasonAnalytics — разбивка матчей одного сезона по картам и по соперникам, ноки и задания игрока.
@@ -823,8 +826,7 @@ type CatalogTask struct {
 	Author    string   `json:"author,omitempty"`
 	Title     string   `json:"title,omitempty"`
 	Name      string   `json:"name,omitempty"` // название задания, например «Голыми руками»
-	Category  string   `json:"category"`       // task | protocol
-	Tag       string   `json:"tag"`            // normal | timed
+	Tag       string   `json:"tag"`            // normal | timed; на время - одно из трёх заданий игрока в раунде
 	MapCodes  []string `json:"mapCodes"`       // карты задания; пусто - общее, на любую карту
 	Active    bool     `json:"active"`         // выключенные не раздаются, но остаются в истории
 	Format    string   `json:"format"`         // any | 1x1 | 2x2 - в матчах какого формата раздаётся
@@ -914,9 +916,10 @@ type LiveComplication struct {
 	ValueType string `json:"valueType"`         // fixed | percent
 	Times     int    `json:"times"`             // сколько раз нарушено (0 — не нарушено)
 	Minutes   int    `json:"minutes,omitempty"` // минуты штрафа (= times); присутствует в JSON, чтобы переживать round-trip
-	Reward    int    `json:"reward,omitempty"`  // протокол 3 сезона: награда за выполнение (+1); 0 - старый протокол-штраф
-	Done      bool   `json:"done,omitempty"`    // протокол 3 сезона выполнен
-	Tag       string `json:"tag,omitempty"`     // тег задания-протокола
+	Reward    int    `json:"reward,omitempty"`  // задание на время: награда за выполнение (+1); 0 - старый протокол-штраф
+	Done      bool   `json:"done,omitempty"`    // задание на время выполнено
+	Tag       string `json:"tag,omitempty"`     // тег задания на время
+	Rarity    string `json:"rarity,omitempty"`  // редкость задания
 }
 
 // LiveVeto - ход пиков-банов для оверлея.
@@ -949,8 +952,9 @@ type LiveBonus struct {
 	Times     int    `json:"times"`              // 0 — не зачтён, >0 — зачтён (для подсветки)
 	Who       string `json:"who,omitempty"`      // имя стороны-владельца контракта
 	Opponent  bool   `json:"opponent,omitempty"` // контракт противника фокусной стороны (для опции «показывать контракты противника»)
-	Category  string `json:"category,omitempty"` // task | map | protocol - вид задания 3 сезона
+	Category  string `json:"category,omitempty"` // task | map - вид задания 3 сезона
 	Tag       string `json:"tag,omitempty"`      // тег задания
+	Rarity    string `json:"rarity,omitempty"`   // редкость задания
 }
 
 // LiveState — состояние оверлея, которым управляет организатор и которое стримится в OBS.
@@ -1099,8 +1103,8 @@ type RoundBonusTask struct {
 	// Игрок команды 2×2, которому засчитано задание.
 	CompletedUser *string `json:"completedUserId,omitempty"`
 	Name          string  `json:"name,omitempty"`
-	Category      string  `json:"category"`          // task | protocol
-	Tag           string  `json:"tag"`               // тег задания из каталога
+	Tag           string  `json:"tag"`               // normal | timed - задание на время
+	Rarity        string  `json:"rarity"`            // common | uncommon | rare | epic | legendary
 	MapCode       string  `json:"mapCode,omitempty"` // задание на карту раунда
 }
 

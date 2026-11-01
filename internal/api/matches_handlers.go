@@ -218,8 +218,9 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 		StartsAt   *time.Time `json:"startsAt"`
 		Prize      string     `json:"prize"`
 		Sides      []struct {
-			UserID  string `json:"userId"`
-			TeamKey string `json:"teamKey"`
+			UserID       string   `json:"userId"`
+			TeamKey      string   `json:"teamKey"`
+			TaskRarities []string `json:"taskRarities"` // ручная настройка редкости заданий стороны
 		} `json:"sides"`
 	}
 	if err := readJSON(r, &b); err != nil {
@@ -244,6 +245,14 @@ func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 	teams := b.Mode == "2x2"
 	for i, sd := range b.Sides {
 		side := store.MatchSide{UserID: strings.TrimSpace(sd.UserID), TeamKey: strings.TrimSpace(sd.TeamKey)}
+		if len(sd.TaskRarities) > 0 {
+			rs, err := store.NormalizeTaskRarities(sd.TaskRarities)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			side.TaskRarities = rs
+		}
 		if teams && side.TeamKey == "" {
 			writeError(w, http.StatusBadRequest, "выберите команды обеих сторон")
 			return

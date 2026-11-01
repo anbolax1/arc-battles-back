@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const taskCols = `id, text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active, format, rarity, round_type`
+const taskCols = `id, text, points, value_type, kind, source, author, title, name, tag, map_codes, active, format, rarity, round_type`
 
 // taskMaps - карты задания из параметра $n без несуществующих и повторов, в порядке карт на сайте.
 func taskMaps(n int) string {
@@ -18,15 +18,15 @@ func taskMaps(n int) string {
 func scanTask(row pgx.Row) (models.CatalogTask, error) {
 	var t models.CatalogTask
 	err := row.Scan(&t.ID, &t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Source, &t.Author, &t.Title,
-		&t.Name, &t.Category, &t.Tag, &t.MapCodes, &t.Active, &t.Format, &t.Rarity, &t.RoundType)
+		&t.Name, &t.Tag, &t.MapCodes, &t.Active, &t.Format, &t.Rarity, &t.RoundType)
 	return t, err
 }
 
-// ListCatalogTasks - весь каталог заданий и протоколов: сначала действующие, затем по разделам.
+// ListCatalogTasks - весь каталог заданий: сначала действующие, затем обычные и на время.
 func (s *Store) ListCatalogTasks(ctx context.Context) ([]models.CatalogTask, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT `+taskCols+` FROM catalog_tasks
-		ORDER BY active DESC, category DESC, kind, map_codes, sort_order, text`)
+		ORDER BY active DESC, tag, kind, map_codes, sort_order, text`)
 	if err != nil {
 		return nil, err
 	}
@@ -44,17 +44,17 @@ func (s *Store) ListCatalogTasks(ctx context.Context) ([]models.CatalogTask, err
 }
 
 var insertTaskSQL = `
-	INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, category, tag, map_codes, active,
+	INSERT INTO catalog_tasks (text, points, value_type, kind, source, author, title, name, tag, map_codes, active,
 	                           format, rarity, round_type, sort_order)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ` + taskMaps(11) + `, $12,
-	        $13, $14, $15, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, ` + taskMaps(10) + `, $11,
+	        $12, $13, $14, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM catalog_tasks))
 	RETURNING ` + taskCols
 
-// taskDuplicateSQL - в каталоге уже есть такое же задание: то же название и описание, раздел, пул и формат.
+// taskDuplicateSQL - в каталоге уже есть такое же задание: то же название и описание, пул и формат.
 const taskDuplicateSQL = `
 	SELECT EXISTS(SELECT 1 FROM catalog_tasks
 	WHERE lower(btrim(name)) = lower(btrim($1)) AND lower(btrim(text)) = lower(btrim($2))
-	  AND category = $3 AND kind = $4 AND format = $5)`
+	  AND kind = $3 AND format = $4)`
 
 // withTaskDefaults заменяет пустую классификацию умолчаниями: так задание из любого места кода
 // попадает в базу корректным, а не падает на ограничениях таблицы.
@@ -93,7 +93,7 @@ func (s *Store) CreateCatalogTasks(ctx context.Context, tasks []models.CatalogTa
 	for _, t := range tasks {
 		t = withTaskDefaults(t)
 		var dup bool
-		if err := tx.QueryRow(ctx, taskDuplicateSQL, t.Name, t.Text, t.Category, t.Kind, t.Format).Scan(&dup); err != nil {
+		if err := tx.QueryRow(ctx, taskDuplicateSQL, t.Name, t.Text, t.Kind, t.Format).Scan(&dup); err != nil {
 			return nil, err
 		}
 		if dup {
@@ -101,7 +101,7 @@ func (s *Store) CreateCatalogTasks(ctx context.Context, tasks []models.CatalogTa
 			continue
 		}
 		created, err := scanTask(tx.QueryRow(ctx, insertTaskSQL, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author,
-			t.Title, t.Name, t.Category, t.Tag, t.MapCodes, t.Active, t.Format, t.Rarity, t.RoundType))
+			t.Title, t.Name, t.Tag, t.MapCodes, t.Active, t.Format, t.Rarity, t.RoundType))
 		if err != nil {
 			return nil, err
 		}
@@ -118,12 +118,12 @@ func (s *Store) UpdateCatalogTask(ctx context.Context, id string, t models.Catal
 	q := `
 		UPDATE catalog_tasks
 		SET text = $2, points = $3, value_type = $4, kind = $5, source = $6, author = $7, title = $8,
-		    name = $9, category = $10, tag = $11, map_codes = ` + taskMaps(12) + `, active = $13,
-		    format = $14, rarity = $15, round_type = $16
+		    name = $9, tag = $10, map_codes = ` + taskMaps(11) + `, active = $12,
+		    format = $13, rarity = $14, round_type = $15
 		WHERE id = $1
 		RETURNING ` + taskCols
 	return scanTask(s.Pool.QueryRow(ctx, q, id, t.Text, t.Points, t.ValueType, t.Kind, t.Source, t.Author, t.Title,
-		t.Name, t.Category, t.Tag, t.MapCodes, t.Active, t.Format, t.Rarity, t.RoundType))
+		t.Name, t.Tag, t.MapCodes, t.Active, t.Format, t.Rarity, t.RoundType))
 }
 
 // DeleteCatalogTask удаляет задание. Если оно уже выдавалось в матчах, удалить нельзя (иначе

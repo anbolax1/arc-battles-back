@@ -259,21 +259,21 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 			continue
 		}
 		done := task.CompletedBy != nil && *task.CompletedBy == task.ParticipantID
-		if task.Category == "protocol" {
-			// Протокол выполняет только его владелец, поэтому оверлей показывает протокол стороны в рейде.
+		if task.Tag == models.TaskTagTimed {
+			// Задание на время выполняет только его владелец, поэтому оверлей показывает его у стороны в рейде.
 			if task.ParticipantID != focus.ID {
 				continue
 			}
 			c := models.LiveComplication{
 				Who: nameOf[task.ParticipantID], Text: overlayTaskText(task), ValueType: models.ValueFixed,
-				Reward: task.Points, Done: done, Tag: task.Tag,
+				Reward: task.Points, Done: done, Tag: task.Tag, Rarity: task.Rarity,
 			}
 			ls.Complications = append(ls.Complications, c)
 			ls.Complication = &c
 			continue
 		}
 		b := models.LiveBonus{
-			Text: overlayTaskText(task), ValueType: models.ValueFixed, Who: nameOf[task.ParticipantID], Category: "task", Tag: task.Tag,
+			Text: overlayTaskText(task), ValueType: models.ValueFixed, Who: nameOf[task.ParticipantID], Category: "task", Tag: task.Tag, Rarity: task.Rarity,
 		}
 		if task.MapCode != "" {
 			b.Category = "map"

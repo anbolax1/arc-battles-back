@@ -112,11 +112,9 @@ func FromArena(am ArenaMatch, live ArenaLive, veto ArenaVeto) Match {
 				it := Task{Side: side, Name: t.Name, Text: t.Description, Points: t.Points, Completed: t.Status == "completed"}
 				switch t.Type {
 				case "universal_1":
-					it.Category = "protocol"
+					it.Timed = true
 				case "map":
-					it.Category, it.MapCode = "task", r.MapCode
-				default:
-					it.Category = "task"
+					it.MapCode = r.MapCode
 				}
 				if it.Completed {
 					taskPts += t.Points

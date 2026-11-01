@@ -23,7 +23,7 @@ func TestBuildRecap(t *testing.T) {
 			{id: "m2", at: at(18, 19), mult: 2, games: 1, winner: 1, users: [2]string{"a", "g"}, total: [2]int{5, 9},
 				rounds: []recapRawRound{
 					{number: 1, mapCode: "dam", played: true, entries: true, points: [2]int{5, 2}, knocks: [2]int{1, 0},
-						tasks: []recapRawTask{{side: 1, name: "Т", category: "task", doneBy: 1}, {side: 0, name: "П", category: "protocol", doneBy: -1}}},
+						tasks: []recapRawTask{{side: 1, name: "Т", doneBy: 1}, {side: 0, name: "П", timed: true, doneBy: -1}}},
 					{number: 2, mapCode: "spaceport", played: true, entries: true, points: [2]int{0, 7}, knocks: [2]int{0, 2}},
 				},
 				veto: []recapRawVeto{{"ban", "dam"}, {"pick", "spaceport"}}},
@@ -81,7 +81,7 @@ func TestBuildRecap(t *testing.T) {
 		math.Abs(r.Upsets[0].Chance-expectedScore(950, 1108)) > 1e-9 {
 		t.Errorf("фавориты %v, неожиданные победы %+v", r.Favorites, r.Upsets)
 	}
-	if r.Tasks.All != [2]int{1, 2} || r.Tasks.General != [2]int{1, 1} || r.Tasks.Protocols != [2]int{0, 1} ||
+	if r.Tasks.All != [2]int{1, 2} || r.Tasks.General != [2]int{1, 1} || r.Tasks.Timed != [2]int{0, 1} ||
 		len(r.Tasks.Doers) != 1 || r.Tasks.Doers[0].Player != gamma {
 		t.Errorf("задания: %+v", r.Tasks)
 	}

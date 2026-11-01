@@ -25,6 +25,8 @@ var (
 type MatchSide struct {
 	UserID  string
 	TeamKey string
+	// Ручная настройка редкости заданий стороны; пусто - по предпочтениям игроков из профиля.
+	TaskRarities []string
 }
 
 // NewMatch - параметры нового матча. Общего ×2 у матча больше нет: удвоение - жетон игрока,
@@ -42,7 +44,8 @@ type NewMatch struct {
 type sideInfo struct {
 	part      models.Participant
 	mmr       int
-	prevGames int // матчей в прошлых сезонах
+	prevGames int      // матчей в прошлых сезонах
+	rarities  []string // ручная настройка редкости заданий; nil - из профиля
 }
 
 // aGoesFirst - останется ли a стороной A, что ходит первой в пиках-банах: у неё меньше MMR, при равном -
@@ -144,6 +147,7 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 	if err != nil {
 		return models.Tournament{}, err
 	}
+	a.rarities, b.rarities = in.Sides[0].TaskRarities, in.Sides[1].TaskRarities
 	if sharePlayers(a.part, b.part) {
 		return models.Tournament{}, ErrConflict
 	}
@@ -177,9 +181,9 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 			members = side.part.Members
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO participants (tournament_id, kind, user_id, name, seed, members)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			id, side.part.Kind, side.part.UserID, side.part.Name, i+1, string(members)); err != nil {
+			INSERT INTO participants (tournament_id, kind, user_id, name, seed, members, task_rarities)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			id, side.part.Kind, side.part.UserID, side.part.Name, i+1, string(members), side.rarities); err != nil {
 			return models.Tournament{}, err
 		}
 	}
@@ -334,13 +338,24 @@ func (s *Store) StartNextRound(ctx context.Context, tournamentID string) (int, e
 	return rounds[next].Number, nil
 }
 
-// taskSlot - вид задания в раздаче раунда.
+// mapTasksEnabled - раздаются ли задания на карту. Пока выключено: вместо него выдаётся ещё одно общее
+// задание, а задания на время берутся только из общих. Включить - поменять на true.
+var mapTasksEnabled = false
+
+// Где может лежать задание слота относительно карт.
+const (
+	mapGeneral = "general" // только общие задания
+	mapOnMap   = "map"     // только задания на карту раунда
+	mapEither  = "either"  // общие и на карту раунда
+)
+
+// taskSlot - вид задания в раздаче раунда: на время или обычное, общее или на карту.
 type taskSlot struct {
-	category string
-	onMap    bool
+	timed bool
+	maps  string
 }
 
-// DealRoundTasks выдаёт каждой стороне на раунд задание, задание на карту раунда и протокол из
+// DealRoundTasks выдаёт каждой стороне на раунд обычное задание, задание на карту раунда и одно задание на время из
 // пула под тип игроков; повторов в матче нет. Если на карту заданий нет, выдаётся ещё одно общее.
 func (s *Store) DealRoundTasks(ctx context.Context, roundID string) error {
 	var tournamentID, mapCode string
@@ -362,12 +377,21 @@ func (s *Store) DealRoundTasks(ctx context.Context, roundID string) error {
 		return err
 	}
 	sort.SliceStable(parts, func(i, j int) bool { return parts[i].Seed < parts[j].Seed })
-	slots := []taskSlot{{"task", false}, {"task", true}, {"protocol", false}}
+	slots := []taskSlot{{false, mapGeneral}, {false, mapOnMap}, {true, mapEither}}
+	if !mapTasksEnabled {
+		slots = []taskSlot{{false, mapGeneral}, {false, mapGeneral}, {true, mapGeneral}}
+	}
 	for _, p := range parts {
+		prefs, err := s.sideRarities(ctx, p)
+		if err != nil {
+			return err
+		}
+		ranks := rarityRanks(prefs)
 		for _, sl := range slots {
-			id, err := s.pickTask(ctx, roundID, sl, mapCode, "")
-			if errors.Is(err, ErrNotFound) && sl.onMap {
-				id, err = s.pickTask(ctx, roundID, taskSlot{"task", false}, "", "")
+			id, err := s.pickTask(ctx, roundID, sl, mapCode, "", ranks)
+			// Нет задания на карту или на время: вместо него ещё одно обычное общее.
+			if errors.Is(err, ErrNotFound) && (sl.timed || sl.maps == mapOnMap) {
+				id, err = s.pickTask(ctx, roundID, taskSlot{false, mapGeneral}, "", "", ranks)
 			}
 			if errors.Is(err, ErrNotFound) {
 				continue
@@ -393,48 +417,45 @@ const taskFitsRound = `
 	AND (ct.round_type = 'any'
 	     OR (ct.round_type = 'free') = (r.number = 1 AND t.format = 'match'))`
 
-// pickTask - случайное действующее задание нужного вида, ещё не выданное в этом матче.
-func (s *Store) pickTask(ctx context.Context, roundID string, sl taskSlot, mapCode, except string) (string, error) {
+// pickTask - действующее задание нужного вида, ещё не выданное в этом матче. Берётся случайное из желаемых
+// редкостей (ranks); если таких нет - ближайшей по редкости. Пустые ranks - любые.
+func (s *Store) pickTask(ctx context.Context, roundID string, sl taskSlot, mapCode, except string, ranks []int32) (string, error) {
 	var id string
 	err := s.Pool.QueryRow(ctx, `
 		SELECT ct.id FROM catalog_tasks ct, rounds r JOIN tournaments t ON t.id = r.tournament_id
-		WHERE r.id = $1 AND ct.active AND ct.category = $2
+		WHERE r.id = $1 AND ct.active AND (ct.tag = 'timed') = $2
 		  AND (t.player_type = 'pvpve' OR ct.kind = t.player_type OR ct.kind = 'pvpve')
-		  AND (($3 = '' AND cardinality(ct.map_codes) = 0) OR $3 = ANY(ct.map_codes))
+		  AND (($5 = 'general' AND cardinality(ct.map_codes) = 0)
+		       OR ($5 = 'map' AND $3 <> '' AND $3 = ANY(ct.map_codes))
+		       OR ($5 = 'either' AND (cardinality(ct.map_codes) = 0 OR $3 = ANY(ct.map_codes))))
 		  AND ct.id <> $4
 		  AND `+taskFitsRound+`
 		  AND ct.id NOT IN (
 		      SELECT rbt.task_id FROM round_bonus_tasks rbt JOIN rounds r2 ON r2.id = rbt.round_id
 		      WHERE r2.tournament_id = t.id)
-		ORDER BY random() LIMIT 1`,
-		roundID, sl.category, mapForSlot(sl, mapCode), except).Scan(&id)
+		ORDER BY (SELECT COALESCE(MIN(ABS(rk - array_position(` + raritySQL + `, ct.rarity))), 0) FROM unnest($6::int[]) rk), random()
+		LIMIT 1`,
+		roundID, sl.timed, mapCode, except, sl.maps, ranks).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	}
 	return id, err
 }
 
-func mapForSlot(sl taskSlot, mapCode string) string {
-	if sl.onMap {
-		return mapCode
-	}
-	return ""
-}
-
 // RerollTask меняет невыполненное задание на другое того же вида (выпало невыполнимое).
 func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
-	var roundID, taskID, category, roundMap string
+	var roundID, ownerID, taskID, tag, roundMap string
 	var onMap bool
 	var completed *string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT r.id, rbt.task_id, ct.category, cardinality(ct.map_codes) > 0,
+		SELECT r.id, rbt.participant_id, rbt.task_id, ct.tag, cardinality(ct.map_codes) > 0,
 		       COALESCE(r.map_code, ''), rbt.completed_by
 		FROM round_bonus_tasks rbt
 		JOIN rounds r ON r.id = rbt.round_id
 		JOIN tournaments t ON t.id = r.tournament_id
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		WHERE rbt.id = $1`, assignmentID).
-		Scan(&roundID, &taskID, &category, &onMap, &roundMap, &completed)
+		Scan(&roundID, &ownerID, &taskID, &tag, &onMap, &roundMap, &completed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -444,8 +465,24 @@ func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
 	if completed != nil {
 		return ErrConflict
 	}
-	sl := taskSlot{category: category, onMap: onMap}
-	next, err := s.pickTask(ctx, roundID, sl, roundMap, taskID)
+	// Замена того же вида: задание на время - другим на время, обычное - обычным с тем же отношением к карте.
+	sl := taskSlot{timed: tag == models.TaskTagTimed, maps: mapGeneral}
+	if mapTasksEnabled {
+		if sl.timed {
+			sl.maps = mapEither
+		} else if onMap {
+			sl.maps = mapOnMap
+		}
+	}
+	owner, err := s.GetParticipant(ctx, ownerID)
+	if err != nil {
+		return err
+	}
+	prefs, err := s.sideRarities(ctx, owner)
+	if err != nil {
+		return err
+	}
+	next, err := s.pickTask(ctx, roundID, sl, roundMap, taskID, rarityRanks(prefs))
 	if err != nil {
 		return err
 	}
@@ -677,7 +714,8 @@ func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, err
 		       COALESCE(h.wins, 0)::int, COALESCE(h.losses, 0)::int,
 		       h.user_id IS NULL, u.password_hash LIKE '!%', COALESCE(prev.games, 0)::int,
 		       EXISTS (SELECT 1 FROM token_ledger l WHERE l.user_id = u.id AND l.kind = 'priority'
-		               AND l.action = 'use' AND l.created_at >= $3)
+		               AND l.action = 'use' AND l.created_at >= $3),
+		       u.task_rarities
 		FROM users u LEFT JOIN h ON h.user_id = u.id LEFT JOIN prev ON prev.user_id = u.id
 		ORDER BY h.user_id IS NULL, ($2::int + COALESCE(h.total, 0)) DESC, lower(u.login)`, rule.Key, rule.Start, mskDay(time.Now()))
 	if err != nil {
@@ -687,7 +725,7 @@ func (s *Store) ListMatchPlayers(ctx context.Context) ([]models.MatchPlayer, err
 	out := []models.MatchPlayer{}
 	for rows.Next() {
 		var p models.MatchPlayer
-		if err := rows.Scan(&p.ID, &p.Login, &p.DisplayName, &p.Mmr, &p.Wins, &p.Losses, &p.IsNew, &p.IsPlaceholder, &p.PrevGames, &p.Priority); err != nil {
+		if err := rows.Scan(&p.ID, &p.Login, &p.DisplayName, &p.Mmr, &p.Wins, &p.Losses, &p.IsNew, &p.IsPlaceholder, &p.PrevGames, &p.Priority, &p.TaskRarities); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

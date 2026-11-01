@@ -63,7 +63,7 @@ type recapRawTask struct {
 	side     int
 	name     string
 	text     string
-	category string
+	timed    bool // задание на время
 	mapCode  string
 	doneBy   int // -1 - не выполнено
 }
@@ -268,7 +268,11 @@ func buildRecap(in recapInput) models.SeasonRecap {
 		out.Maps = append(out.Maps, models.RecapMap{Code: mi.Code, Name: mi.Name})
 	}
 	roundStat := map[int]*models.RecapRoundStat{}
-	type taskKey struct{ name, category, mapCode string }
+	type taskKey struct {
+		name    string
+		timed   bool
+		mapCode string
+	}
 	taskStat := map[taskKey]*models.RecapTask{}
 	var taskOrder []taskKey
 	doneBy, offeredTo := map[int]int{}, map[int]int{}
@@ -337,17 +341,17 @@ func buildRecap(in recapInput) models.SeasonRecap {
 				offeredTo[owner]++
 				cnt := &out.Tasks.General
 				switch {
-				case t.category == "protocol":
-					cnt = &out.Tasks.Protocols
+				case t.timed:
+					cnt = &out.Tasks.Timed
 				case t.mapCode != "":
 					cnt = &out.Tasks.MapTasks
 				}
 				cnt[1]++
 				out.Tasks.All[1]++
-				k := taskKey{t.name, t.category, t.mapCode}
+				k := taskKey{t.name, t.timed, t.mapCode}
 				ts := taskStat[k]
 				if ts == nil {
-					ts = &models.RecapTask{Name: t.name, Text: t.text, Category: t.category, Map: t.mapCode}
+					ts = &models.RecapTask{Name: t.name, Text: t.text, Timed: t.timed, Map: t.mapCode}
 					taskStat[k] = ts
 					taskOrder = append(taskOrder, k)
 				}

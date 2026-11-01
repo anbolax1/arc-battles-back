@@ -119,6 +119,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/me/extras", s.handleMyExtras)
 			r.Post("/me/stat-claims/{kind}", s.handleSubmitStatClaim)
 			r.Put("/me/favorites", s.handleSaveFavorites)
+			r.Put("/me/task-rarities", s.handleSaveTaskRarities)
 			r.Post("/me/reset", s.handleResetRating)
 			r.Get("/player-search", s.handleSearchPlayers)
 			// Очередь выступлений: запись, выход и подтверждение готовности - только за себя.

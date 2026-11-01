@@ -54,7 +54,7 @@ type Task struct {
 	Name      string
 	Text      string
 	Points    int
-	Category  string // task | protocol
+	Timed     bool   // задание на время (в арене - универсальное, бывший протокол)
 	MapCode   string
 	Completed bool
 }
@@ -261,9 +261,9 @@ func catalogTask(ctx context.Context, tx pgx.Tx, t Task) (string, error) {
 	var id string
 	err := tx.QueryRow(ctx, `
 		SELECT id FROM catalog_tasks
-		WHERE lower(name) = lower($1) AND category = $2
+		WHERE lower(name) = lower($1) AND (tag = 'timed') = $2
 		  AND (($3 = '' AND cardinality(map_codes) = 0) OR $3 = ANY(map_codes))
-		ORDER BY (kind = 'pvp') DESC, active DESC LIMIT 1`, t.Name, t.Category, t.MapCode).Scan(&id)
+		ORDER BY (kind = 'pvp') DESC, active DESC LIMIT 1`, t.Name, t.Timed, t.MapCode).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -275,8 +275,8 @@ func catalogTask(ctx context.Context, tx pgx.Tx, t Task) (string, error) {
 		codes = append(codes, t.MapCode)
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO catalog_tasks (name, text, points, value_type, kind, source, category, map_codes, active, sort_order)
-		VALUES ($1, $2, $3, 'fixed', 'pvp', 'official', $4, $5, false, 5000) RETURNING id`,
-		t.Name, t.Text, t.Points, t.Category, codes).Scan(&id)
+		INSERT INTO catalog_tasks (name, text, points, value_type, kind, source, tag, map_codes, active, sort_order)
+		VALUES ($1, $2, $3, 'fixed', 'pvp', 'official', CASE WHEN $4 THEN 'timed' ELSE 'normal' END, $5, false, 5000) RETURNING id`,
+		t.Name, t.Text, t.Points, t.Timed, codes).Scan(&id)
 	return id, err
 }
