@@ -147,7 +147,10 @@ func TestTaskRarityPrefsIntegration(t *testing.T) {
 		t.Errorf("профиль {epic} без эпических: выдано %v (ждали ближайшие rare/legendary)", got[e.ID])
 	}
 
-	// 4. По умолчанию (все редкости) ограничения нет: не падаем и выдаём три задания.
+	// 4. По умолчанию у игрока только обычные: в профиле одна редкость, и выдаются три задания.
+	if def, err := st.GetUserTaskRarities(ctx, f.ID); err != nil || fmt.Sprint(def) != "[common]" {
+		t.Errorf("умолчание профиля: %v %v", def, err)
+	}
 	if len(got[f.ID]) != 3 {
 		t.Errorf("по умолчанию выдано %v", got[f.ID])
 	}

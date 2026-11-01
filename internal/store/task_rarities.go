@@ -46,7 +46,7 @@ func rarityRanks(rarities []string) []int32 {
 	return out
 }
 
-// GetUserTaskRarities - какие редкости заданий хочет получать игрок (по умолчанию все).
+// GetUserTaskRarities - какие редкости заданий хочет получать игрок (по умолчанию только обычные).
 func (s *Store) GetUserTaskRarities(ctx context.Context, userID string) ([]string, error) {
 	var out []string
 	err := s.Pool.QueryRow(ctx, `SELECT task_rarities FROM users WHERE id = $1`, userID).Scan(&out)
@@ -73,7 +73,7 @@ func (s *Store) SaveUserTaskRarities(ctx context.Context, userID string, raritie
 }
 
 // sideRarities - какие редкости заданий выдавать стороне матча: ручная настройка стороны, а если её нет -
-// предпочтения игроков стороны из профиля (у команды 2×2 складываются), а если и их нет - любые.
+// предпочтения игроков стороны из профиля (у команды 2×2 складываются), а если и их нет - обычные.
 func (s *Store) sideRarities(ctx context.Context, p models.Participant) ([]string, error) {
 	var manual []string
 	if err := s.Pool.QueryRow(ctx, `SELECT task_rarities FROM participants WHERE id = $1`, p.ID).Scan(&manual); err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -103,7 +103,7 @@ func (s *Store) sideRarities(ctx context.Context, p models.Participant) ([]strin
 		return nil, err
 	}
 	if len(all) == 0 {
-		return slices.Clone(models.TaskRarities), nil
+		return []string{models.RarityCommon}, nil
 	}
 	return all, nil
 }
