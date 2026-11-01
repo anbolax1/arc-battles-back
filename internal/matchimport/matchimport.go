@@ -54,7 +54,7 @@ type Task struct {
 	Name      string
 	Text      string
 	Points    int
-	Timed     bool   // задание на время (в арене - универсальное, бывший протокол)
+	Timed     bool // задание на время (в арене - универсальное, бывший протокол)
 	MapCode   string
 	Completed bool
 }

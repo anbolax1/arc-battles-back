@@ -60,12 +60,12 @@ type recapRawRound struct {
 }
 
 type recapRawTask struct {
-	side     int
-	name     string
-	text     string
-	timed    bool // задание на время
-	mapCode  string
-	doneBy   int // -1 - не выполнено
+	side    int
+	name    string
+	text    string
+	timed   bool // задание на время
+	mapCode string
+	doneBy  int // -1 - не выполнено
 }
 
 type recapRawVeto struct{ action, mapCode string }

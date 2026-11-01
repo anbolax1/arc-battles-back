@@ -433,7 +433,7 @@ func (s *Store) pickTask(ctx context.Context, roundID string, sl taskSlot, mapCo
 		  AND ct.id NOT IN (
 		      SELECT rbt.task_id FROM round_bonus_tasks rbt JOIN rounds r2 ON r2.id = rbt.round_id
 		      WHERE r2.tournament_id = t.id)
-		ORDER BY (SELECT COALESCE(MIN(ABS(rk - array_position(` + raritySQL + `, ct.rarity))), 0) FROM unnest($6::int[]) rk), random()
+		ORDER BY (SELECT COALESCE(MIN(ABS(rk - array_position(`+raritySQL+`, ct.rarity))), 0) FROM unnest($6::int[]) rk), random()
 		LIMIT 1`,
 		roundID, sl.timed, mapCode, except, sl.maps, ranks).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {

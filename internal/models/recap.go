@@ -145,23 +145,23 @@ type RecapComeback struct {
 }
 
 type RecapTasks struct {
-	All       [2]int          `json:"all"` // выполнено и выдано
-	MapTasks  [2]int          `json:"mapTasks"`
-	General   [2]int          `json:"general"`
-	Timed     [2]int          `json:"timed"` // задания на время
-	Distinct  int             `json:"distinct"`
-	Easy      []RecapTask     `json:"easy"`
-	Hard      []RecapTask     `json:"hard"`
-	Doers     []RecapTaskDoer `json:"doers"`
+	All      [2]int          `json:"all"` // выполнено и выдано
+	MapTasks [2]int          `json:"mapTasks"`
+	General  [2]int          `json:"general"`
+	Timed    [2]int          `json:"timed"` // задания на время
+	Distinct int             `json:"distinct"`
+	Easy     []RecapTask     `json:"easy"`
+	Hard     []RecapTask     `json:"hard"`
+	Doers    []RecapTaskDoer `json:"doers"`
 }
 
 type RecapTask struct {
-	Name     string `json:"name"`
-	Text     string `json:"text"`
-	Timed    bool   `json:"timed"`
-	Map      string `json:"map"`
-	Done     int    `json:"done"`
-	Offered  int    `json:"offered"`
+	Name    string `json:"name"`
+	Text    string `json:"text"`
+	Timed   bool   `json:"timed"`
+	Map     string `json:"map"`
+	Done    int    `json:"done"`
+	Offered int    `json:"offered"`
 }
 
 type RecapTaskDoer struct {
