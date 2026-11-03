@@ -214,6 +214,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/users/overview", s.handleListUsersOverview)
 			r.Patch("/users/{id}/role", s.handleSetUserRole)
 			r.Post("/users/{id}/claim-link", s.handleCreateClaimLink)
+			r.Post("/users/{id}/reset-password", s.handleResetPassword)
 			r.Get("/registrations/pool", s.handleListPool)
 			r.Get("/registrations/pool/page", s.handleListPoolPage)
 			r.Post("/registrations/{id}/decide", s.handleDecideRegistration)

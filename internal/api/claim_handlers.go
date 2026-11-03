@@ -3,10 +3,12 @@ package api
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/battle-for-respect/backend/internal/auth"
+	"github.com/battle-for-respect/backend/internal/store"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -38,6 +40,30 @@ func (s *Server) handleCreateClaimLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+// POST /api/users/{id}/reset-password - организатор сбрасывает пароль любого аккаунта и получает
+// ссылку на установку нового. Свой пароль так не сбросить: организатор остался бы без входа.
+func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if me, ok := userFrom(r.Context()); ok && me.ID == id {
+		writeError(w, http.StatusConflict, "свой пароль сбросить нельзя")
+		return
+	}
+	tok, err := randomToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "не удалось сгенерировать токен")
+		return
+	}
+	switch err := s.Store.ResetPassword(r.Context(), id, tok); {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "пользователь не найден")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 
 // GET /api/claim/{token} — данные для страницы активации (ник аккаунта). Публичный.

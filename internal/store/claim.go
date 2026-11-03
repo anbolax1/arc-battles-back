@@ -23,6 +23,35 @@ func (s *Store) userPlaceholder(ctx context.Context, userID string) (bool, error
 	return isPlaceholderHash(hash), nil
 }
 
+// resetPasswordHash закрывает вход по паролю, пока игрок не задаст новый по ссылке.
+const resetPasswordHash = "!reset"
+
+// ResetPassword отключает пароль аккаунта и сохраняет ссылку на установку нового:
+// забытый или утёкший пароль не должен работать, а старые сессии гаснут.
+func (s *Store) ResetPassword(ctx context.Context, userID, newToken string) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	ct, err := tx.Exec(ctx,
+		`UPDATE users SET password_hash=$2, tokens_valid_after=now(), updated_at=now() WHERE id=$1`,
+		userID, resetPasswordHash)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM account_claim_tokens WHERE user_id=$1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO account_claim_tokens (token, user_id) VALUES ($1,$2)`, newToken, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // EnsureClaimToken возвращает актуальный токен активации заглушки (существующий или новый).
 // ok=false — если аккаунт не заглушка (уже с настоящим паролем) или не найден. Если regenerate —
 // прежние токены удаляются и создаётся свежий.
