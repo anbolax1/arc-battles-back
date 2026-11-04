@@ -189,10 +189,17 @@ func (q *qtx) load() ([]queueItem, map[string]*qEntry, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	prio, err := queuePriorityTimes(q.ctx, q.tx, all)
+	if err != nil {
+		return nil, nil, err
+	}
 	for i := range items {
 		e := byID[items[i].ID]
 		e.Today = maxToday(today, byEntry[e.ID])
 		items[i].Today = e.Today
+		if e.Today == 0 && qEligible(e.Status) {
+			items[i].Prio = earliestPrio(prio, byEntry[e.ID])
+		}
 	}
 	return items, byID, nil
 }
@@ -625,7 +632,17 @@ func (s *Store) JoinQueue(ctx context.Context, sessionID, actor string, in Queue
 		if err != nil {
 			return err
 		}
-		items = qPlaceNew(items, queueItem{ID: entryID, Status: QEntryWaiting, Today: maxToday(todayMatches, members)})
+		item := queueItem{ID: entryID, Status: QEntryWaiting, Today: maxToday(todayMatches, members)}
+		if item.Today == 0 {
+			// Активированный сегодня «Без очереди» действует и на тех, кто встал в очередь позже.
+			prio, err := queuePriorityTimes(q.ctx, q.tx, members)
+			if err != nil {
+				return err
+			}
+			item.Prio = earliestPrio(prio, members)
+		}
+		items = qPlaceNew(items, item)
+		items = qPlacePriority(items, entryID)
 		if err := q.writeOrder(items); err != nil {
 			return err
 		}
@@ -1035,16 +1052,21 @@ func (q *qtx) finishMatch(m *qMatchRow) error {
 		return err
 	}
 	for _, id := range ids {
-		if _, alive := byID[id]; !alive {
-			continue // запись закрыта (аккаунт удалён) - в очередь не возвращается
+		e, alive := byID[id]
+		if !alive {
+			continue // запись уже закрыта (аккаунт удалён)
 		}
+		// Сыгравший выходит из очереди: чтобы выступить ещё раз, он записывается заново и встаёт после ждущих.
 		if _, err := q.tx.Exec(q.ctx, `UPDATE queue_entries SET performed_count = performed_count + 1 WHERE id = $1`, id); err != nil {
 			return err
 		}
-		if err := q.resetEntry(id, QEntryWaiting); err != nil {
+		if err := q.closeEntry(id, QEntryLeft); err != nil {
 			return err
 		}
-		items = qPlaceBack(items, id)
+		items, _, _ = qWithout(items, id)
+		if err := q.event("performed", id, m.ID, e.Label, nil); err != nil {
+			return err
+		}
 	}
 	if err := q.writeOrder(items); err != nil {
 		return err
@@ -1294,4 +1316,59 @@ func (s *Store) RemoveEntry(ctx context.Context, sessionID, actor, entryID strin
 		q.res.EntryID = e.ID
 		return q.event("remove", e.ID, "", e.Label, nil)
 	})
+}
+
+// PromotePriority поднимает игрока, активировавшего «Без очереди», в каждой живой очереди, где он стоит:
+// запись встаёт в начало по времени активации (кто раньше, тот выше), в журнал пишется событие.
+// Вызывается после того, как жетон потрачен. Возвращает результаты по очередям, чтобы оповестить страницы.
+func (s *Store) PromotePriority(ctx context.Context, userID, by string) ([]QueueResult, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT m.session_id FROM queue_entry_members m
+		JOIN queue_entries e ON e.id = m.entry_id AND e.position IS NOT NULL
+		JOIN queue_sessions qs ON qs.id = m.session_id AND qs.status = 'active'
+		WHERE m.user_id = $1 AND m.active`, userID)
+	if err != nil {
+		return nil, err
+	}
+	var sessions []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		sessions = append(sessions, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []QueueResult
+	for _, sid := range sessions {
+		res, err := s.queueTx(ctx, sid, by, func(q *qtx) error {
+			items, byID, err := q.load()
+			if err != nil {
+				return err
+			}
+			e, err := q.userEntry(userID, byID)
+			if err != nil {
+				return err
+			}
+			from := qIndex(items, e.ID) + 1
+			items = qPlacePriority(items, e.ID)
+			if err := q.writeOrder(items); err != nil {
+				return err
+			}
+			q.res.EntryID = e.ID
+			return q.event("priority", e.ID, "", e.Label, map[string]any{"from": from, "to": qIndex(items, e.ID) + 1})
+		})
+		if errors.Is(err, ErrNotFound) {
+			continue // запись успела уйти из очереди
+		}
+		if err != nil {
+			return out, err
+		}
+		out = append(out, res)
+	}
+	return out, nil
 }

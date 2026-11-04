@@ -319,17 +319,23 @@ func TestQueueFlowFifoAndMoveToEnd(t *testing.T) {
 	_, err = e.st.CallEntry(e.ctx, sid, "", "")
 	wantKind(t, err, store.ErrQueueState)
 
-	// Новичок во время эфира встаёт за ждущими, но перед теми, кто уже выступил.
+	// Сыгравшие выходят из очереди; новичок встаёт за ждущими.
 	e.finishMatch(sid)
-	wantOrder(t, e.order(sid), "Ник c", "Ник d", "Ник a", "Ник b")
+	wantOrder(t, e.order(sid), "Ник c", "Ник d")
 	f := e.user("f")
 	e.join(sid, f)
-	wantOrder(t, e.order(sid), "Ник c", "Ник d", "Ник f", "Ник a", "Ник b")
+	wantOrder(t, e.order(sid), "Ник c", "Ник d", "Ник f")
+	if got := e.status(sid, "Ник a"); got != "" {
+		t.Errorf("сыгравший a остался в очереди: %q", got)
+	}
+	// Выступить ещё раз можно, записавшись заново: сыгравший сегодня встаёт за всеми, число выступлений помнится.
+	e.join(sid, a)
+	wantOrder(t, e.order(sid), "Ник c", "Ник d", "Ник f", "Ник a")
 
 	s = e.snap(sid, "")
 	for _, en := range s.Entries {
-		if (en.Name == "Ник a" || en.Name == "Ник b") && (en.PerformedCount != 1 || en.Status != "waiting") {
-			t.Errorf("%s после выступления: %+v", en.Name, en)
+		if en.Name == "Ник a" && (en.PerformedCount != 1 || en.Status != "waiting") {
+			t.Errorf("%s после повторной записи: %+v", en.Name, en)
 		}
 	}
 	if s.Last == nil || s.Last.Status != "finished" || s.Match != nil {
@@ -361,7 +367,7 @@ func TestQueueFlowFifoAndMoveToEnd(t *testing.T) {
 			t.Errorf("отмена засчитала выступление: %+v", en)
 		}
 	}
-	wantOrder(t, e.order(sid), "Ник c", "Ник d", "Ник f", "Ник a", "Ник b")
+	wantOrder(t, e.order(sid), "Ник c", "Ник d", "Ник f", "Ник a")
 }
 
 func TestQueueSkipNoShowAndReturn(t *testing.T) {
@@ -598,16 +604,30 @@ func TestQueueTeams2x2(t *testing.T) {
 	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{}); err != nil {
 		t.Fatal(err)
 	}
-	// После матча команды уходят в конец целиком: напарники не расходятся по позициям.
+	// После матча команды выходят из очереди целиком; чтобы выступить снова, записываются заново.
 	e.finishMatch(sid)
 	s = e.snap(sid, "")
-	for _, en := range s.Entries {
-		if len(en.Members) != 2 || en.PerformedCount != 1 || en.Status != "waiting" {
-			t.Errorf("команда после матча: %+v", en)
-		}
+	if len(s.Entries) != 0 {
+		t.Errorf("команды остались в очереди после матча: %+v", s.Entries)
 	}
 	if s.Last == nil || len(s.Last.Sides) != 2 || len(s.Last.Sides[0].Members) != 2 {
 		t.Errorf("история матча 2×2: %+v", s.Last)
+	}
+	if me := e.snap(sid, a.ID).Me; me.EntryID != "" || !me.CanJoin {
+		t.Errorf("сыгравший a снова может записаться: %+v", me)
+	}
+	for _, rejoin := range []struct {
+		u    models.User
+		team string
+	}{{a, alpha.TeamKey}, {c, beta.TeamKey}} {
+		if _, err := e.st.JoinQueue(e.ctx, sid, rejoin.u.ID, store.QueueJoin{UserID: rejoin.u.ID, TeamKey: rejoin.team}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, en := range e.snap(sid, "").Entries {
+		if len(en.Members) != 2 || en.PerformedCount != 1 || en.Status != "waiting" {
+			t.Errorf("команда после повторной записи: %+v", en)
+		}
 	}
 
 	// Напарник выходит - уходит вся команда, на её месте никого не остаётся.
@@ -679,6 +699,7 @@ func TestQueueSessionLifecycle(t *testing.T) {
 	_, err = e.st.FinishQueueSession(e.ctx, sid, "")
 	wantKind(t, err, store.ErrQueueState)
 	e.finishMatch(sid)
+	e.join(sid, a) // сыгравшие вышли из очереди
 
 	// Подготовка матча при завершении сессии отменяется.
 	if _, err := e.st.CallEntry(e.ctx, sid, "", ""); err != nil {
@@ -699,7 +720,7 @@ func TestQueueSessionLifecycle(t *testing.T) {
 	_, err = e.st.LeaveQueue(e.ctx, sid, a.ID)
 	wantKind(t, err, store.ErrQueueState)
 	s := e.snap(sid, "")
-	if s.Session.State != "finished" || s.Session.FinishedAt == nil || len(s.Entries) != 2 || len(s.History) != 2 || s.Match != nil {
+	if s.Session.State != "finished" || s.Session.FinishedAt == nil || len(s.Entries) != 1 || len(s.History) != 2 || s.Match != nil {
 		t.Errorf("завершённая сессия: state=%s entries=%d history=%d match=%+v", s.Session.State, len(s.Entries), len(s.History), s.Match)
 	}
 	if s.Me.CanJoin {
@@ -719,7 +740,7 @@ func TestQueueSessionLifecycle(t *testing.T) {
 		t.Errorf("новая сессия не пуста: %+v", s.Entries)
 	}
 	e.join(sid3, a) // игрок прежней сессии записывается в новую
-	if got := e.snap(sid, "").Entries; len(got) != 2 {
+	if got := e.snap(sid, "").Entries; len(got) != 1 {
 		t.Errorf("история прежней сессии изменилась: %+v", got)
 	}
 	if def := store.QueueDefaultTitle(time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)); def != "Очередь на выступления | 30.10.2026" {
@@ -1126,5 +1147,76 @@ func TestQueueMyCalls(t *testing.T) {
 	}
 	if len(calls(x)) != 0 || len(calls(y)) != 0 {
 		t.Error("в завершённой сессии вызовов нет")
+	}
+}
+
+// «Без очереди»: запись активировавшего встаёт в начало, кто раньше - тот выше; опоздавший к очереди
+// игрок с активным жетоном тоже встаёт выше; в журнал пишется событие.
+func TestQueuePriorityTokenPromotes(t *testing.T) {
+	e := newQueueEnv(t)
+	sid := e.session("1x1")
+	a, b, c, d := e.user("a"), e.user("b"), e.user("c"), e.user("d")
+	for _, u := range []models.User{a, b, c} {
+		e.join(sid, u)
+	}
+	activate := func(u models.User) {
+		t.Helper()
+		if _, err := e.pool.Exec(e.ctx, `INSERT INTO token_ledger (user_id, kind, action, delta) VALUES ($1, 'priority', 'grant', 1)`, u.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.st.ActivatePriority(e.ctx, u.ID, ""); err != nil {
+			t.Fatalf("ActivatePriority(%s): %v", u.Login, err)
+		}
+		if _, err := e.st.PromotePriority(e.ctx, u.ID, ""); err != nil {
+			t.Fatalf("PromotePriority(%s): %v", u.Login, err)
+		}
+	}
+	want := func(names ...string) {
+		t.Helper()
+		if got := e.order(sid); !slices.Equal(got, names) {
+			t.Errorf("порядок %v, want %v", got, names)
+		}
+	}
+	want("Ник a", "Ник b", "Ник c")
+
+	activate(c)
+	want("Ник c", "Ник a", "Ник b")
+	activate(b)
+	want("Ник c", "Ник b", "Ник a") // b активировал позже c
+
+	s := e.snap(sid, "")
+	if !s.Entries[0].Priority || !s.Entries[1].Priority || s.Entries[2].Priority {
+		t.Errorf("подсветка: %+v", s.Entries)
+	}
+
+	// Опоздавший с жетоном, активированным до записи: встаёт в конец блока, но выше обычных.
+	if _, err := e.pool.Exec(e.ctx, `INSERT INTO token_ledger (user_id, kind, action, delta) VALUES ($1, 'priority', 'use', -1)`, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.join(sid, d)
+	want("Ник c", "Ник b", "Ник d", "Ник a")
+
+	// Игрока нет в очереди - ничего не меняется и не падает.
+	if res, err := e.st.PromotePriority(e.ctx, e.user("z").ID, ""); err != nil || len(res) != 0 {
+		t.Errorf("игрок вне очереди: %v %v", res, err)
+	}
+
+	// В журнале событие с актёром и позициями.
+	evs, err := e.st.QueueEvents(e.ctx, sid, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prio []models.QueueEvent
+	for _, ev := range evs {
+		if ev.Kind == "priority" {
+			prio = append(prio, ev)
+		}
+	}
+	if len(prio) != 2 {
+		t.Fatalf("событий priority: %d, want 2 (%v)", len(prio), evs)
+	}
+	// Свежие сверху: последним активировал b - с 3 на 2.
+	if prio[0].Label != "Ник b" || prio[0].Data["from"] != float64(3) || prio[0].Data["to"] != float64(2) {
+		t.Errorf("событие b: %+v", prio[0])
 	}
 }

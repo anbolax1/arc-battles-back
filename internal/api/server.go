@@ -121,6 +121,7 @@ func (s *Server) Router() http.Handler {
 			r.Put("/me/favorites", s.handleSaveFavorites)
 			r.Put("/me/task-rarities", s.handleSaveTaskRarities)
 			r.Post("/me/reset", s.handleResetRating)
+			r.Post("/me/priority", s.handleSelfActivatePriority)
 			r.Get("/player-search", s.handleSearchPlayers)
 			// Очередь выступлений: запись, выход и подтверждение готовности - только за себя.
 			r.Get("/queue/me", s.handleQueueMyCalls)

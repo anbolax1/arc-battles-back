@@ -59,28 +59,30 @@ func TestQueueNewcomerGoesBeforeTodaysPlayers(t *testing.T) {
 		t.Errorf("матчей за сегодня: %v", got)
 	}
 
-	// Сыграл матч из очереди - счёт растёт, и новичок снова обходит его.
+	// Сыграл матч из очереди - выходит из очереди; записавшись заново, встаёт позади тех, кто сегодня не играл.
 	e.callAndConfirm(sid, x, y)
 	if _, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{}); err != nil {
 		t.Fatal(err)
 	}
 	e.finishMatch(sid)
-	wantOrder(t, e.order(sid), "Ник w", "Ник o1", "Ник p", "Ник x", "Ник y")
+	wantOrder(t, e.order(sid), "Ник w", "Ник o1", "Ник p")
 	e.join(sid, v)
-	wantOrder(t, e.order(sid), "Ник w", "Ник o1", "Ник v", "Ник p", "Ник x", "Ник y")
+	wantOrder(t, e.order(sid), "Ник w", "Ник o1", "Ник v", "Ник p")
+	e.join(sid, x)
+	wantOrder(t, e.order(sid), "Ник w", "Ник o1", "Ник v", "Ник p", "Ник x")
 	for _, en := range e.snap(sid, "").Entries {
 		got[en.Name] = en.TodayMatches
 	}
-	if got["Ник x"] != 1 || got["Ник y"] != 1 || got["Ник p"] != 1 {
+	if got["Ник x"] != 1 || got["Ник p"] != 1 {
 		t.Errorf("после матча: %v", got)
 	}
 
 	// Вышел и записался заново - всё равно позади тех, кто сегодня не играл.
-	if _, err := e.st.LeaveQueue(e.ctx, sid, x.ID); err != nil {
+	if _, err := e.st.LeaveQueue(e.ctx, sid, v.ID); err != nil {
 		t.Fatal(err)
 	}
-	e.join(sid, x)
-	wantOrder(t, e.order(sid), "Ник w", "Ник o1", "Ник v", "Ник p", "Ник y", "Ник x")
+	e.join(sid, v)
+	wantOrder(t, e.order(sid), "Ник w", "Ник o1", "Ник v", "Ник p", "Ник x")
 }
 
 // В 2×2 команда считается по самому игравшему из двух: напарник, игравший сегодня, ставит команду позади.

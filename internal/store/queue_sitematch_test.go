@@ -107,7 +107,7 @@ func TestQueueStartCreatesSiteMatch(t *testing.T) {
 	_, err = e.st.CallEntry(e.ctx, sid, "", "")
 	wantKind(t, err, store.ErrQueueState)
 
-	// Матч сайта завершён - очередь продвигается: двое в конец, счёт выступлений растёт.
+	// Матч сайта завершён - очередь продвигается: сыгравшие двое выходят из очереди.
 	ref, ok := e.st.QueueMatchOfTournament(e.ctx, res.MatchID)
 	if !ok || ref.SessionID != sid {
 		t.Fatalf("матч очереди по матчу сайта: %+v %v", ref, ok)
@@ -118,16 +118,17 @@ func TestQueueStartCreatesSiteMatch(t *testing.T) {
 	if _, changed, err := e.st.SettleQueueMatch(e.ctx, ref, "", true); err != nil || !changed {
 		t.Fatalf("SettleQueueMatch: %v %v", changed, err)
 	}
-	wantOrder(t, e.order(sid), "Ник c", "Ник a", "Ник b")
+	wantOrder(t, e.order(sid), "Ник c")
 	if _, changed, err := e.st.SettleQueueMatch(e.ctx, ref, "", true); err != nil || changed {
 		t.Errorf("повторное продвижение изменило очередь: %v %v", changed, err)
 	}
 	s = e.snap(sid, "")
-	if s.Last == nil || s.Last.TournamentID != res.MatchID || s.Entries[1].PerformedCount != 1 {
+	if s.Last == nil || s.Last.TournamentID != res.MatchID {
 		t.Errorf("после матча: %+v", s.Last)
 	}
 
 	// Отмена матча сайта возвращает вызванных без «выступления».
+	e.join(sid, a) // сыгравший записывается заново
 	e.callAndConfirm(sid, c, a)
 	res2, err := e.st.StartQueueMatch(e.ctx, sid, "", store.QueueMatchStart{})
 	if err != nil {

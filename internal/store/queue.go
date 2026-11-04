@@ -280,6 +280,42 @@ func (s *Store) queueMmrs(ctx context.Context, db queryer, format string, entrie
 	return out, nil
 }
 
+// queuePriorityTimes - когда игроки активировали «Без очереди» сегодня (по игровому дню). Кто не активировал - не в списке.
+func queuePriorityTimes(ctx context.Context, db queryer, userIDs []string) (map[string]time.Time, error) {
+	out := map[string]time.Time{}
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	rows, err := db.Query(ctx, `
+		SELECT user_id, MAX(created_at) FROM token_ledger
+		WHERE user_id = ANY($1) AND kind = 'priority' AND action = 'use' AND created_at >= $2
+		GROUP BY user_id`, userIDs, mskDay(time.Now()))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+		out[id] = at
+	}
+	return out, rows.Err()
+}
+
+// earliestPrio - самое раннее время «Без очереди» среди игроков записи; нулевое, если ни у кого нет.
+func earliestPrio(times map[string]time.Time, users []string) time.Time {
+	var at time.Time
+	for _, u := range users {
+		if t, ok := times[u]; ok && (at.IsZero() || t.Before(at)) {
+			at = t
+		}
+	}
+	return at
+}
+
 // queuePriorityToday - у кого из игроков сегодня действует жетон «Без очереди».
 func queuePriorityToday(ctx context.Context, db queryer, userIDs []string) (map[string]bool, error) {
 	out := map[string]bool{}

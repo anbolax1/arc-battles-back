@@ -1,5 +1,7 @@
 package store
 
+import "time"
+
 // Порядок очереди считается здесь, без базы: список записей по позициям превращается в новый список,
 // а в БД он записывается разом (см. queueWriteOrder).
 
@@ -19,6 +21,9 @@ type queueItem struct {
 	ID     string
 	Status string
 	Today  int // сколько матчей игрок уже сыграл сегодня: кто играл, стоит позади тех, кто нет
+	// Prio - когда игрок активировал «Без очереди» (у команды - самый ранний из двоих). Нулевое значение - жетона нет.
+	// Заполняется только у ждущих записей, сегодня ещё не игравших: сыграв, запись встаёт в общий порядок.
+	Prio time.Time
 }
 
 // qInMatch - запись вызвана на матч или выступает: она стоит в начале списка.
@@ -83,15 +88,6 @@ func qPlaceNew(items []queueItem, it queueItem) []queueItem {
 	return qInsertAt(items, qFreshEnd(items), it)
 }
 
-// qPlaceBack - запись, закончившая выступление: в самый конец.
-func qPlaceBack(items []queueItem, id string) []queueItem {
-	rest, it, ok := qWithout(items, id)
-	if !ok {
-		return items
-	}
-	return append(rest, it)
-}
-
 // qPlaceSkipped - пропущенная запись уходит в конец своей группы: не выступавшая - за всеми не выступавшими,
 // выступавшая - в самый конец. Так пропуск не даёт ей обойти тех, кто уже ждёт и ещё не выходил.
 func qPlaceSkipped(items []queueItem, id string) []queueItem {
@@ -103,6 +99,26 @@ func qPlaceSkipped(items []queueItem, id string) []queueItem {
 		return qInsertAt(rest, qFreshEnd(rest), it)
 	}
 	return append(rest, it)
+}
+
+// qPrioIndex - куда встаёт запись с «Без очереди», активированным в момент at: за вызванными на матч и за теми,
+// кто активировал жетон раньше. Остальные, у кого жетона нет, остаются позади.
+func qPrioIndex(items []queueItem, at time.Time) int {
+	i := qInflight(items)
+	for i < len(items) && !items[i].Prio.IsZero() && !items[i].Prio.After(at) {
+		i++
+	}
+	return i
+}
+
+// qPlacePriority - запись с «Без очереди» встаёт в начало очереди по времени активации: кто раньше, тот выше.
+// Записи без жетона, уже сыгравшие сегодня или вызванные на матч остаются на месте.
+func qPlacePriority(items []queueItem, id string) []queueItem {
+	rest, it, ok := qWithout(items, id)
+	if !ok || it.Prio.IsZero() || !qEligible(it.Status) || it.Today > 0 {
+		return items
+	}
+	return qInsertAt(rest, qPrioIndex(rest, it.Prio), it)
 }
 
 // qInflight - сколько записей в начале списка уже вызвано на матч.

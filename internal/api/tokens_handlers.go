@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -91,15 +92,35 @@ func (s *Server) handleGrantTokens(w http.ResponseWriter, r *http.Request) {
 	s.writeWallet(w, r, id)
 }
 
-// POST /api/users/{id}/tokens/priority - модератор активирует игроку «Без очереди» на сегодня.
+// POST /api/users/{id}/tokens/priority - модератор активирует игроку «Без очереди» на сегодня (если игрок сам не успел).
 func (s *Server) handleActivatePriority(w http.ResponseWriter, r *http.Request) {
 	mod, _ := userFrom(r.Context())
-	id := chi.URLParam(r, "id")
-	if err := s.Store.ActivatePriority(r.Context(), id, mod.ID); err != nil {
+	s.activatePriority(w, r, chi.URLParam(r, "id"), mod.ID)
+}
+
+// POST /api/me/priority - игрок сам тратит жетон «Без очереди». Отменить его сам он не может: иначе поднялся бы
+// в очереди и забрал жетон обратно.
+func (s *Server) handleSelfActivatePriority(w http.ResponseWriter, r *http.Request) {
+	u, _ := userFrom(r.Context())
+	s.activatePriority(w, r, u.ID, u.ID)
+}
+
+// activatePriority тратит жетон «Без очереди» игрока userID; by - кто активировал (для журнала).
+func (s *Server) activatePriority(w http.ResponseWriter, r *http.Request, userID, by string) {
+	if err := s.Store.ActivatePriority(r.Context(), userID, by); err != nil {
 		writeTokenError(w, err)
 		return
 	}
-	s.writeWallet(w, r, id)
+	// Жетон потрачен; если игрок стоит в живой очереди, он встаёт выше. Сбой здесь не отменяет активацию:
+	// запись можно переставить вручную.
+	moved, err := s.Store.PromotePriority(r.Context(), userID, by)
+	if err != nil {
+		log.Printf("«Без очереди» игрока %s: поднять в очереди не удалось: %v", userID, err)
+	}
+	for _, res := range moved {
+		s.publishQueue(res)
+	}
+	s.writeWallet(w, r, userID)
 }
 
 // DELETE /api/users/{id}/tokens/priority - «Без очереди» активировали по ошибке: жетон возвращается.

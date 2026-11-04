@@ -3,6 +3,7 @@ package store
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func qi(id, status string, performed int) queueItem {
@@ -27,18 +28,6 @@ func TestQueuePlaceNewIntoEmptyAndAllToday(t *testing.T) {
 	items := []queueItem{qi("c", QEntryWaiting, 1), qi("d", QEntryWaiting, 1)}
 	if got, want := ids(qPlaceNew(items, qi("n", QEntryWaiting, 0))), []string{"n", "c", "d"}; !slices.Equal(got, want) {
 		t.Errorf("все выступали: %v, want %v", got, want)
-	}
-}
-
-func TestQueuePlaceBackIsLast(t *testing.T) {
-	items := []queueItem{qi("a", QEntryPerforming, 0), qi("b", QEntryWaiting, 0), qi("c", QEntryWaiting, 1)}
-	got := ids(qPlaceBack(items, "a"))
-	if want := []string{"b", "c", "a"}; !slices.Equal(got, want) {
-		t.Errorf("после выступления: %v, want %v", got, want)
-	}
-	// Неизвестная запись ничего не меняет.
-	if got := ids(qPlaceBack(items, "zzz")); !slices.Equal(got, ids(items)) {
-		t.Errorf("чужая запись: %v", got)
 	}
 }
 
@@ -98,7 +87,6 @@ func TestQueueOperationsKeepMembers(t *testing.T) {
 	items = qPlaceNew(items, qi("n", QEntryWaiting, 0))
 	items = qMoveTo(items, "n", 1)
 	items = qPlaceSkipped(items, "a")
-	items = qPlaceBack(items, "b")
 	items = qPlaceCalled(items, "c")
 	got := ids(items)
 	slices.Sort(got)
@@ -115,5 +103,58 @@ func TestQueuePlaceNewReturningPerformerGoesLast(t *testing.T) {
 	}
 	if len(items) != 2 {
 		t.Errorf("исходный список изменён: %v", ids(items))
+	}
+}
+
+func qp(id, status string, today int, prio time.Time) queueItem {
+	return queueItem{ID: id, Status: status, Today: today, Prio: prio}
+}
+
+// «Без очереди»: запись встаёт за вызванными и за теми, кто активировал жетон раньше; без жетона - остаётся позади.
+func TestQueuePlacePriorityOrdersByActivationTime(t *testing.T) {
+	t0 := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	at := func(min int) time.Time { return t0.Add(time.Duration(min) * time.Minute) }
+
+	items := []queueItem{qi("x", QEntryPerforming, 0), qi("a", QEntryWaiting, 0), qi("b", QEntryWaiting, 0), qi("c", QEntryWaiting, 0)}
+	items[3].Prio = at(1)
+	items = qPlacePriority(items, "c")
+	if want := []string{"x", "c", "a", "b"}; !slices.Equal(ids(items), want) {
+		t.Fatalf("первый с жетоном: %v, want %v", ids(items), want)
+	}
+
+	// Второй активировал позже - встаёт за первым, но выше всех без жетона.
+	items[3].Prio = at(5)
+	items = qPlacePriority(items, "b")
+	if want := []string{"x", "c", "b", "a"}; !slices.Equal(ids(items), want) {
+		t.Fatalf("второй с жетоном: %v, want %v", ids(items), want)
+	}
+
+	// Тот, кто активировал раньше всех, но записан позже, обходит остальных.
+	items[3].Prio = at(0)
+	items = qPlacePriority(items, "a")
+	if want := []string{"x", "a", "c", "b"}; !slices.Equal(ids(items), want) {
+		t.Fatalf("активировал раньше всех: %v, want %v", ids(items), want)
+	}
+}
+
+func TestQueuePlacePriorityLeavesOthersInPlace(t *testing.T) {
+	now := time.Now()
+	base := func() []queueItem {
+		return []queueItem{qi("x", QEntryPerforming, 0), qi("a", QEntryWaiting, 0), qi("b", QEntryWaiting, 1), qi("c", QEntryWaiting, 1)}
+	}
+	cases := map[string]queueItem{
+		"без жетона":        qp("c", QEntryWaiting, 0, time.Time{}),
+		"уже играл сегодня": qp("c", QEntryWaiting, 1, now),
+		"вызван на матч":    qp("c", QEntryInvited, 0, now),
+	}
+	for name, it := range cases {
+		items := base()
+		items[3] = it
+		if got := ids(qPlacePriority(items, "c")); !slices.Equal(got, []string{"x", "a", "b", "c"}) {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+	if got := ids(qPlacePriority(base(), "нет-такой")); !slices.Equal(got, []string{"x", "a", "b", "c"}) {
+		t.Errorf("неизвестная запись: %v", got)
 	}
 }

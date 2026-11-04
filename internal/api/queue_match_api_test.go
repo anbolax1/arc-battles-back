@@ -71,7 +71,7 @@ func TestQueueAPIStartCreatesRealMatch(t *testing.T) {
 	// Матч завершён в консоли - очередь продвинулась сама, без вызова очереди.
 	a.want(boss, "POST", "/tournaments/"+tid+"/finish", nil, 200)
 	snap = a.want(p3, "GET", "/queue", nil, 200)
-	if got := entryNames(snap); len(got) != 3 || got[0] != "Ник p3" {
+	if got := entryNames(snap); len(got) != 1 || got[0] != "Ник p3" { // сыгравшие вышли из очереди
 		t.Errorf("порядок после матча: %v", got)
 	}
 	if snap["match"] != nil || snap["last"].(map[string]any)["tournamentId"] != tid {
@@ -83,6 +83,10 @@ func TestQueueAPIStartCreatesRealMatch(t *testing.T) {
 	if call := a.want(p1, "GET", "/queue/me", nil, 200)["calls"].([]any); len(call) != 0 {
 		t.Errorf("вызовов у p1 больше нет: %v", call)
 	}
+
+	// Сыгравшие записываются заново и встают за p3.
+	a.want(p1, "POST", "/queue/sessions/"+sid+"/join", nil, 200)
+	a.want(p2, "POST", "/queue/sessions/"+sid+"/join", nil, 200)
 
 	// Отмена матча в консоли возвращает вызванных в ожидание без «выступления».
 	a.want(boss, "POST", "/queue/sessions/"+sid+"/call", nil, 200)
