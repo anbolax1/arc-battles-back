@@ -2,7 +2,7 @@ name: Deploy backend
 
 # Автодеплой: сборка статического бинаря на раннере → заливка на VPS → рестарт.
 # Миграции БД прогоняются бинарём на старте. Секреты репозитория:
-#   SSH_HOST  — IP/домен VPS (напр. 155.212.133.147)
+#   SSH_HOST  — IP/домен VPS (сейчас 179.252.219.141; настройка доступа - deploy/setup-ci-access.sh)
 #   SSH_USER  — admin2
 #   SSH_KEY   — приватный deploy-ключ (целиком, с BEGIN/END)
 
@@ -60,9 +60,16 @@ jobs:
             export XDG_RUNTIME_DIR=/run/user/$(id -u)
             chmod +x ~/back/server-linux.new
             mv -f ~/back/server-linux.new ~/back/server-linux
-            systemctl --user restart respect-back
+            # Сервис пользовательский (старый сервер) или системный (новый, рестарт через sudo без пароля).
+            if systemctl --user cat respect-back >/dev/null 2>&1; then
+              systemctl --user restart respect-back
+              LOGS="journalctl --user -u respect-back"
+            else
+              sudo -n systemctl restart respect-back
+              LOGS="sudo -n journalctl -u respect-back"
+            fi
             sleep 2
             curl -fsS localhost:8080/api/health
             echo
-            journalctl --user -u respect-back -n 10 --no-pager | grep -iE "goose|migrat|version" || true
+            $LOGS -n 10 --no-pager | grep -iE "goose|migrat|version" || true
           '
