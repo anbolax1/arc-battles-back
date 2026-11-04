@@ -597,6 +597,7 @@ type StatClaim struct {
 	Reason        string     `json:"reason,omitempty"`
 	CreatedAt     time.Time  `json:"createdAt"`
 	DecidedAt     *time.Time `json:"decidedAt,omitempty"`
+	DecidedBy     string     `json:"decidedBy,omitempty"` // ник модератора, принявшего решение; игроку не отдаётся
 }
 
 // PlayerFavorites - любимое игрока: тиммейты (до пяти), карта, оружие, усилитель и щит.

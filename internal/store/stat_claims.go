@@ -41,13 +41,14 @@ var StatLimits = map[string]int{
 const statClaimCols = `c.id, c.user_id, u.login, u.display_name, c.kind, c.value, c.region, c.screenshot, c.status, c.reason,
 	c.created_at, c.decided_at,
 	(SELECT p.value FROM stat_claims p WHERE p.user_id = c.user_id AND p.kind = c.kind AND p.status = 'approved'
-	   AND p.created_at < c.created_at ORDER BY p.created_at DESC LIMIT 1)`
+	   AND p.created_at < c.created_at ORDER BY p.created_at DESC LIMIT 1),
+	COALESCE((SELECT COALESCE(NULLIF(d.display_name, ''), d.login) FROM users d WHERE d.id = c.decided_by), '')`
 
 func scanStatClaim(row pgx.Row) (models.StatClaim, error) {
 	var c models.StatClaim
 	var shot string
 	err := row.Scan(&c.ID, &c.UserID, &c.Login, &c.DisplayName, &c.Kind, &c.Value, &c.Region, &shot, &c.Status, &c.Reason,
-		&c.CreatedAt, &c.DecidedAt, &c.Previous)
+		&c.CreatedAt, &c.DecidedAt, &c.Previous, &c.DecidedBy)
 	c.ScreenshotURL = "/media/" + shot
 	return c, err
 }
@@ -130,11 +131,16 @@ func (s *Store) PlayerRegion(ctx context.Context, userID string) (string, error)
 
 // MyStatClaims - последняя заявка игрока каждого вида: в своём профиле он видит, проверена ли она.
 func (s *Store) MyStatClaims(ctx context.Context, userID string) ([]models.StatClaim, error) {
-	return s.listStatClaims(ctx, `
+	out, err := s.listStatClaims(ctx, `
 		SELECT DISTINCT ON (c.kind) `+statClaimCols+`
 		FROM stat_claims c JOIN users u ON u.id = c.user_id
 		WHERE c.user_id = $1
 		ORDER BY c.kind, c.created_at DESC`, userID)
+	// Кто проверил - рабочая информация модераторов, самому игроку её не отдаём.
+	for i := range out {
+		out[i].DecidedBy = ""
+	}
+	return out, err
 }
 
 // UserStatClaims - заявки игрока для модератора, свежие сверху.
