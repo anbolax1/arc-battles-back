@@ -164,5 +164,9 @@ func (s *Server) handlePlayerModeration(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if out.NoPassword, err = s.Store.HasNoPassword(ctx, id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }

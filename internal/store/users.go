@@ -65,7 +65,8 @@ func (s *Store) CreateRegisteredUser(ctx context.Context, nick, embark, password
 	}
 	var taken bool
 	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM users WHERE lower(login) = lower($1) OR lower(display_name) = lower($1))`, nick).Scan(&taken); err != nil {
+		`SELECT EXISTS (SELECT 1 FROM users WHERE lower(login) = lower($1) OR lower(display_name) = lower($1))
+		    OR EXISTS (SELECT 1 FROM user_login_aliases WHERE lower(alias) = lower($1))`, nick).Scan(&taken); err != nil {
 		return models.User{}, err
 	}
 	if taken {
@@ -96,8 +97,8 @@ func (s *Store) CreateRegisteredUser(ctx context.Context, nick, embark, password
 }
 
 // GetUserAuthByLogin возвращает идентификатор, роль и хеш пароля по нику (без учёта регистра) - для проверки пароля
-// при входе. Ник ищется среди логинов, а если такого логина нет - среди имён на сайте: у старых аккаунтов логин
-// мог отличаться от имени. Имя подходит, только если оно одно на всех: при совпадении у двоих вход по нему закрыт.
+// при входе. Ник ищется среди логинов, потом среди имён на сайте (у старых аккаунтов логин мог отличаться от имени;
+// имя подходит, только если оно одно на всех), потом среди прежних ников, которые игроку сменил модератор.
 // ErrNotFound, если пользователя нет.
 func (s *Store) GetUserAuthByLogin(ctx context.Context, login string) (id string, role models.Role, passwordHash string, err error) {
 	var r string
@@ -120,6 +121,19 @@ func (s *Store) GetUserAuthByLogin(ctx context.Context, login string) (id string
 		}
 		if err := rows.Err(); err != nil {
 			return "", "", "", err
+		}
+		if found == 0 {
+			// Ник, который игроку сменил модератор: входить по прежнему можно.
+			aerr := s.Pool.QueryRow(ctx,
+				`SELECT u.id, u.role, u.password_hash FROM user_login_aliases a JOIN users u ON u.id = a.user_id
+				 WHERE lower(a.alias) = lower($1)`, login).Scan(&id, &r, &passwordHash)
+			if errors.Is(aerr, pgx.ErrNoRows) {
+				return "", "", "", ErrNotFound
+			}
+			if aerr != nil {
+				return "", "", "", aerr
+			}
+			return id, models.Role(r), passwordHash, nil
 		}
 		if found != 1 {
 			return "", "", "", ErrNotFound
@@ -181,6 +195,21 @@ func (s *Store) GetUser(ctx context.Context, id string) (models.User, error) {
 // GetUserByLogin — пользователь по логину (без учёта регистра). ErrNotFound если нет.
 func (s *Store) GetUserByLogin(ctx context.Context, login string) (models.User, error) {
 	u, err := scanUser(s.Pool.QueryRow(ctx, `SELECT `+userCols+` FROM users WHERE lower(login) = lower($1)`, login))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return u, ErrNotFound
+	}
+	return u, err
+}
+
+// GetUserByLoginOrAlias - пользователь по логину, а если такого нет - по прежнему нику, который ему сменил
+// модератор: старые ссылки на профиль должны вести к игроку. ErrNotFound, если нет ни того, ни другого.
+func (s *Store) GetUserByLoginOrAlias(ctx context.Context, login string) (models.User, error) {
+	u, err := s.GetUserByLogin(ctx, login)
+	if !errors.Is(err, ErrNotFound) {
+		return u, err
+	}
+	u, err = scanUser(s.Pool.QueryRow(ctx, `
+		SELECT `+userCols+` FROM users WHERE id = (SELECT user_id FROM user_login_aliases WHERE lower(alias) = lower($1))`, login))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrNotFound
 	}

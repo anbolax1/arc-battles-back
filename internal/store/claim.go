@@ -23,6 +23,11 @@ func (s *Store) userPlaceholder(ctx context.Context, userID string) (bool, error
 	return isPlaceholderHash(hash), nil
 }
 
+// HasNoPassword сообщает, что у аккаунта нет рабочего пароля и вход возможен только по ссылке.
+func (s *Store) HasNoPassword(ctx context.Context, userID string) (bool, error) {
+	return s.userPlaceholder(ctx, userID)
+}
+
 // resetPasswordHash закрывает вход по паролю, пока игрок не задаст новый по ссылке.
 const resetPasswordHash = "!reset"
 

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -20,11 +21,15 @@ func randomToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// POST /api/users/{id}/claim-link — организатор выдаёт ссылку активации для аккаунта-заглушки.
-// Возвращает актуальный токен (стабильный, пока игрок не активировал аккаунт). ?regenerate=1 —
-// выпустить новый (прежний перестаёт работать). Superadmin-only (см. server.go).
+// POST /api/users/{id}/claim-link — организатор или модератор выдаёт ссылку активации для аккаунта-заглушки
+// (в том числе после сброса пароля). Возвращает актуальный токен (стабильный, пока игрок не задал пароль).
+// ?regenerate=1 — выпустить новый (прежний перестаёт работать). Модератор - только для игроков.
 func (s *Server) handleCreateClaimLink(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	target, _, ok := s.loadManagedAccount(w, r)
+	if !ok {
+		return
+	}
+	id := target.ID
 	tok, err := randomToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "не удалось сгенерировать токен")
@@ -42,11 +47,15 @@ func (s *Server) handleCreateClaimLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
-// POST /api/users/{id}/reset-password - организатор сбрасывает пароль любого аккаунта и получает
-// ссылку на установку нового. Свой пароль так не сбросить: организатор остался бы без входа.
+// POST /api/users/{id}/reset-password - организатор или модератор сбрасывает пароль и получает ссылку на
+// установку нового. Модератор - только у игроков. Свой пароль так не сбросить: остались бы без входа.
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if me, ok := userFrom(r.Context()); ok && me.ID == id {
+	target, actor, ok := s.loadManagedAccount(w, r)
+	if !ok {
+		return
+	}
+	id := target.ID
+	if actor.ID == id {
 		writeError(w, http.StatusConflict, "свой пароль сбросить нельзя")
 		return
 	}
@@ -63,6 +72,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	log.Printf("сброс пароля: %s (%s), выполнил %s", target.Login, id, actor.Login)
 	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
 

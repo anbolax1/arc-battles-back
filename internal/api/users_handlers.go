@@ -94,10 +94,10 @@ func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
-// GET /api/players/{login} — публичный профиль игрока: user + сезон-статы + история (B6).
+// GET /api/players/{login} — публичный профиль игрока (по прежнему нику отдаётся тот же профиль, страница уводит на новый адрес): user + сезон-статы + история (B6).
 func (s *Server) handleGetPlayer(w http.ResponseWriter, r *http.Request) {
 	login := chi.URLParam(r, "login")
-	u, err := s.Store.GetUserByLogin(r.Context(), login)
+	u, err := s.Store.GetUserByLoginOrAlias(r.Context(), login)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "игрок не найден")
 		return

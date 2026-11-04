@@ -140,6 +140,13 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/users/{id}/tokens/priority", s.handleCancelPriority)
 			r.Post("/tournaments/{id}/double", s.handleMatchDouble)
 
+			// Аккаунты игроков: ссылка на пароль, сброс, смена ника, удаление пустого профиля.
+			// Над аккаунтами модераторов и организаторов модератор не властен (см. canManageAccount).
+			r.Post("/users/{id}/claim-link", s.handleCreateClaimLink)
+			r.Post("/users/{id}/reset-password", s.handleResetPassword)
+			r.Patch("/users/{id}/nick", s.handleRenameUser)
+			r.Delete("/users/{id}", s.handleDeleteUser)
+
 			// Очередь выступлений (организатор и модератор): сессии, вызовы, порядок, матчи, журнал.
 			r.Post("/queue/sessions", s.handleCreateQueueSession)
 			r.Patch("/queue/sessions/{id}", s.handleUpdateQueueSession)
@@ -213,8 +220,6 @@ func (s *Server) Router() http.Handler {
 			r.Get("/users", s.handleListUsers)
 			r.Get("/users/overview", s.handleListUsersOverview)
 			r.Patch("/users/{id}/role", s.handleSetUserRole)
-			r.Post("/users/{id}/claim-link", s.handleCreateClaimLink)
-			r.Post("/users/{id}/reset-password", s.handleResetPassword)
 			r.Get("/registrations/pool", s.handleListPool)
 			r.Get("/registrations/pool/page", s.handleListPoolPage)
 			r.Post("/registrations/{id}/decide", s.handleDecideRegistration)

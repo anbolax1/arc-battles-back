@@ -662,6 +662,8 @@ type PlayerModeration struct {
 	Claims  []StatClaim    `json:"claims"`
 	Ledger  []TokenEntry   `json:"ledger"`
 	Matches []PendingMatch `json:"matches"`
+	// NoPassword - у аккаунта нет рабочего пароля (импорт или сброс): войти можно только по ссылке.
+	NoPassword bool `json:"noPassword"`
 }
 
 // MyExtras - свой профиль: последние заявки с часами и ноками, любимое и можно ли его менять.
