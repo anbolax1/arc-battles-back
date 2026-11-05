@@ -38,7 +38,11 @@ const (
 
 // VetoOrder - порядок пиков-банов. Два раунда: два бана каждому, затем первую карту берёт B, вторую - A
 // (для баланса у A меньше MMR); три раунда: бан A, бан B, пик A, пик B, третью карту выбирает чат.
+// У матча на один раунд карту ставит сервер случайно, выбирать нечего.
 func VetoOrder(rounds int) []models.VetoStep {
+	if rounds == 1 {
+		return []models.VetoStep{}
+	}
 	if rounds != 3 {
 		return []models.VetoStep{
 			{Action: "ban", Side: "A"},
@@ -58,12 +62,25 @@ func VetoOrder(rounds int) []models.VetoStep {
 	}
 }
 
-// MatchRounds - сколько раундов будет в новом матче: у шоу-матча всегда три, обычный - два или три.
+// MatchRounds - сколько раундов будет в новом матче: у шоу-матча всегда три, обычный - один, два или три.
 func MatchRounds(format string, rounds int) int {
-	if format == FormatShow || rounds == 3 {
+	switch {
+	case format == FormatShow || rounds == 3:
 		return 3
+	case rounds == 1:
+		return 1
 	}
 	return 2
+}
+
+// randomMapCode - код случайной карты из действующего пула.
+func randomMapCode(ctx context.Context, tx pgx.Tx) (string, error) {
+	var code string
+	err := tx.QueryRow(ctx, `SELECT code FROM maps WHERE active ORDER BY random() LIMIT 1`).Scan(&code)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return code, err
 }
 
 // ListVeto - ходы пиков-банов матча по порядку.

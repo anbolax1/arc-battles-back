@@ -66,9 +66,9 @@ func (s *Store) chanceVersion(ctx context.Context) (string, error) {
 	return v, err
 }
 
-// chanceKit - на каком наборе играется раунд: первый раунд обычного матча - на бесплатном.
-func chanceKit(format string, number int) int {
-	if number == 1 && format == "match" {
+// chanceKit - на каком наборе играется раунд: первый раунд обычного матча из нескольких раундов - на бесплатном.
+func chanceKit(format string, number, total int) int {
+	if number == 1 && format == "match" && total > 1 {
 		return kitFree
 	}
 	return kitOwn
@@ -88,7 +88,7 @@ func chanceTaskKind(timed bool, onMap bool) int {
 func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error) {
 	const scope = `t.mode = '1x1' AND t.status = 'finished' AND t.season_id IS NOT NULL`
 	rows, err := s.Pool.Query(ctx, `
-		SELECT t.id, t.format, t.games, COALESCE(t.winner_participant_id, ''), t.voided
+		SELECT t.id, t.format, t.total_rounds, t.games, COALESCE(t.winner_participant_id, ''), t.voided
 		FROM tournaments t WHERE `+scope+`
 		ORDER BY COALESCE(t.starts_at, t.created_at), t.created_at, t.id`)
 	if err != nil {
@@ -97,17 +97,18 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 	var recs []chanceMatchRec
 	idx := map[string]int{}
 	format := map[string]string{}
+	total := map[string]int{}
 	winners := map[string]string{}
 	for rows.Next() {
 		var id, f, winner string
-		var games int
+		var rounds, games int
 		var voided bool
-		if err := rows.Scan(&id, &f, &games, &winner, &voided); err != nil {
+		if err := rows.Scan(&id, &f, &rounds, &games, &winner, &voided); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		idx[id] = len(recs)
-		format[id], winners[id] = f, winner
+		format[id], total[id], winners[id] = f, rounds, winner
 		recs = append(recs, chanceMatchRec{ID: id, Games: games, Winner: -1, Voided: voided})
 	}
 	rows.Close()
@@ -178,7 +179,7 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 		ref := roundRef{mi, len(recs[mi].Rounds)}
 		roundOf[rid] = ref
 		numbers[ref] = number
-		recs[mi].Rounds = append(recs[mi].Rounds, chanceRoundRec{Map: code, Kit: chanceKit(format[tid], number), Played: played})
+		recs[mi].Rounds = append(recs[mi].Rounds, chanceRoundRec{Map: code, Kit: chanceKit(format[tid], number, total[tid]), Played: played})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -423,11 +424,11 @@ func chanceSetupFor(m *chanceModel, t models.Tournament, users [2]string) matchS
 	sort.Slice(rounds, func(i, j int) bool { return rounds[i].Number < rounds[j].Number })
 	recs := make([]chanceRoundRec, 0, len(rounds))
 	for _, r := range rounds {
-		recs = append(recs, chanceRoundRec{Map: r.MapCode, Kit: chanceKit(t.Format, r.Number), Played: true})
+		recs = append(recs, chanceRoundRec{Map: r.MapCode, Kit: chanceKit(t.Format, r.Number, t.TotalRounds), Played: true})
 	}
 	if len(recs) == 0 {
 		for n := 1; n <= max(t.TotalRounds, 1); n++ {
-			recs = append(recs, chanceRoundRec{Kit: chanceKit(t.Format, n), Played: true})
+			recs = append(recs, chanceRoundRec{Kit: chanceKit(t.Format, n, t.TotalRounds), Played: true})
 		}
 	}
 	return m.setup(users, recs)

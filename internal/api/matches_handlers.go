@@ -207,7 +207,7 @@ func (s *Server) handleCreatePlaceholder(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, status, u)
 }
 
-// POST /api/matches - новый матч; обычный сразу становится текущим (rounds: 2 или 3), шоу-матч уходит
+// POST /api/matches - новый матч; обычный сразу становится текущим (rounds: 1, 2 или 3), шоу-матч уходит
 // в расписание и всегда идёт три раунда.
 func (s *Server) handleCreateMatch(w http.ResponseWriter, r *http.Request) {
 	var b struct {

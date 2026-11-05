@@ -18,6 +18,8 @@ func TestMatchRounds(t *testing.T) {
 		{FormatMatch, 2, 2},
 		{FormatMatch, 3, 3},
 		{FormatMatch, 5, 2},
+		{FormatMatch, 1, 1}, // один раунд - только в обычном матче
+		{FormatShow, 1, 3},
 		{FormatShow, 0, 3},
 		{FormatShow, 2, 3}, // шоу-матч всегда на три раунда
 	}
@@ -40,7 +42,7 @@ func vetoText(order []models.VetoStep) string {
 }
 
 // Два раунда: по два бана, первую карту берёт B, вторую - A; три раунда: третью карту выбирает чат.
-// У прошлых матчей с одним раундом пиков-банов не было - для них порядок двухраундовый.
+// Один раунд: пиков-банов нет, карту ставит сервер случайно.
 func TestVetoOrder(t *testing.T) {
 	cases := []struct {
 		rounds int
@@ -48,7 +50,7 @@ func TestVetoOrder(t *testing.T) {
 	}{
 		{2, "ban A, ban B, ban A, ban B, pick B 1, pick A 2"},
 		{3, "ban A, ban B, pick A 1, pick B 2, vote 3"},
-		{1, "ban A, ban B, ban A, ban B, pick B 1, pick A 2"},
+		{1, ""},
 	}
 	for _, c := range cases {
 		if got := vetoText(VetoOrder(c.rounds)); got != c.want {

@@ -151,9 +151,11 @@ func (s *Server) sidePlace(ctx context.Context, team bool, key string) (int, err
 	return s.Store.Player1x1Place(ctx, key)
 }
 
-// isMatchFlow - матч ведётся новым пультом (два раунда или пики-баны), его оверлей считает сервер.
+// isMatchFlow - матч ведётся новым пультом (несколько раундов, пики-баны или случайная карта единственного
+// раунда), его оверлей считает сервер.
 func isMatchFlow(st models.MatchState) bool {
-	return st.Tournament.TotalRounds > 1 || len(st.Veto) > 0
+	rounds := st.Tournament.Rounds
+	return st.Tournament.TotalRounds > 1 || len(st.Veto) > 0 || (len(rounds) > 0 && rounds[0].MapCode != "")
 }
 
 func overlayTaskText(t models.RoundBonusTask) string {

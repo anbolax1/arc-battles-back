@@ -100,6 +100,7 @@ func TestTaskClassificationIntegration(t *testing.T) {
 
 	// Раздача: у каждой проверки своя карта, на ней одно задание - в слот карты выпадает оно или ничего.
 	mapSeq := 0
+	totalRounds := 2 // сколько раундов в матче: бесплатный набор только у первого раунда матча из нескольких
 	check := func(taskFormat, roundType, matchMode, matchFormat string, roundNumber int, wantDealt bool) {
 		t.Helper()
 		mapSeq++
@@ -122,7 +123,7 @@ func TestTaskClassificationIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		tourIDs = append(tourIDs, tour.ID)
-		if _, err := pool.Exec(ctx, `UPDATE tournaments SET format = $2 WHERE id = $1`, tour.ID, matchFormat); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE tournaments SET format = $2, total_rounds = $3 WHERE id = $1`, tour.ID, matchFormat, totalRounds); err != nil {
 			t.Fatal(err)
 		}
 		for i, n := range []string{"p1", "p2"} {
@@ -171,4 +172,8 @@ func TestTaskClassificationIntegration(t *testing.T) {
 	// Комбинация: формат и тип раунда проверяются вместе.
 	check("2x2", "paid", "2x2", match, 2, true)
 	check("2x2", "paid", "1x1", match, 2, false)
+	// Матч на один раунд - только платный, на своём наборе.
+	totalRounds = 1
+	check("any", "free", "2x2", match, 1, false)
+	check("any", "paid", "2x2", match, 1, true)
 }

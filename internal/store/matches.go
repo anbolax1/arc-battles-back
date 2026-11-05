@@ -35,7 +35,7 @@ type NewMatch struct {
 	Mode       string
 	PlayerType string
 	Format     string     // match | show
-	Rounds     int        // обычный матч - 2 или 3 раунда, у шоу-матча всегда 3
+	Rounds     int        // обычный матч - 1, 2 или 3 раунда, у шоу-матча всегда 3
 	StartsAt   *time.Time // когда начнётся шоу-матч
 	Prize      string     // приз шоу-матча
 	Sides      [2]MatchSide
@@ -172,6 +172,16 @@ func (s *Store) CreateMatch(ctx context.Context, in NewMatch) (models.Tournament
 	}
 	for n := 1; n <= rounds; n++ {
 		if _, err := tx.Exec(ctx, `INSERT INTO rounds (tournament_id, number, status) VALUES ($1, $2, 'pending')`, id, n); err != nil {
+			return models.Tournament{}, err
+		}
+	}
+	// Единственный раунд пиков-банов не имеет: карта выпадает случайно из пула.
+	if rounds == 1 {
+		code, err := randomMapCode(ctx, tx)
+		if err != nil {
+			return models.Tournament{}, err
+		}
+		if err := setRoundMap(ctx, tx, id, 1, code); err != nil {
 			return models.Tournament{}, err
 		}
 	}
@@ -410,12 +420,13 @@ func (s *Store) DealRoundTasks(ctx context.Context, roundID string) error {
 }
 
 // taskFitsRound - задание подходит матчу и раунду: формат матча (1x1/2x2) и тип раунда. Бесплатный
-// раунд - первый раунд обычного матча (все на бесплатном наборе), остальные - платные, на своём.
+// раунд - первый раунд обычного матча из нескольких раундов (все на бесплатном наборе), остальные,
+// в том числе единственный, - платные, на своём.
 // Ждёт в запросе алиасы ct (задание), r (раунд), t (турнир).
 const taskFitsRound = `
 	(ct.format = 'any' OR ct.format = t.mode)
 	AND (ct.round_type = 'any'
-	     OR (ct.round_type = 'free') = (r.number = 1 AND t.format = 'match'))`
+	     OR (ct.round_type = 'free') = (r.number = 1 AND t.format = 'match' AND t.total_rounds > 1))`
 
 // pickTask - действующее задание нужного вида, ещё не выданное в этом матче. Берётся случайное из желаемых
 // редкостей (ranks); если таких нет - ближайшей по редкости. Пустые ranks - любые.
