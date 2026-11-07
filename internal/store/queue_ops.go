@@ -912,7 +912,7 @@ func (s *Store) ConfirmEntry(ctx context.Context, sessionID, actor, entryID stri
 // QueueMatchStart - как создать матч сайта для вызванной пары.
 type QueueMatchStart struct {
 	Force      bool   // создать, не дожидаясь подтверждения готовности
-	Rounds     int    // 2 или 3 раунда, по умолчанию 2
+	Rounds     int    // 1, 2 или 3 раунда, по умолчанию 2; один раунд - платный набор, карта случайная
 	PlayerType string // pve | pvp | pvpve, по умолчанию pvp
 }
 
@@ -925,8 +925,8 @@ func (s *Store) StartQueueMatch(ctx context.Context, sessionID, actor string, in
 	if in.PlayerType == "" {
 		in.PlayerType = "pvp"
 	}
-	if in.Rounds != 2 && in.Rounds != 3 {
-		return QueueResult{}, qInvalid("в матче два или три раунда")
+	if in.Rounds < 1 || in.Rounds > 3 {
+		return QueueResult{}, qInvalid("в матче один, два или три раунда")
 	}
 	if in.PlayerType != "pve" && in.PlayerType != "pvp" && in.PlayerType != "pvpve" {
 		return QueueResult{}, qInvalid("тип игроков - pve, pvp или pvpve")
