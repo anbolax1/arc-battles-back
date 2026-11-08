@@ -403,6 +403,7 @@ type LeaderboardRow struct {
 	Wins        int       `json:"wins"`
 	Losses      int       `json:"losses"`               // без ничьих
 	Tournaments int       `json:"tournaments"`          // матчей, вместе с ничьими
+	Knocks      int       `json:"knocks"`               // ноки за матчи таблицы
 	Tags        []UserTag `json:"tags,omitempty"`       // теги, видные на сайте
 	Patches     []string  `json:"patches,omitempty"`    // самые редкие нашивки сезона, до трёх
 	PatchCount  int       `json:"patchCount,omitempty"` // всего нашивок в сезоне
@@ -426,6 +427,7 @@ type TeamLeaderboardRow struct {
 	Wins    int          `json:"wins"`
 	Losses  int          `json:"losses"`
 	Games   int          `json:"games"`
+	Knocks  int          `json:"knocks"` // ноки обоих игроков за матчи таблицы
 	Members []TeamMember `json:"members"`
 }
 

@@ -33,7 +33,8 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 		       COALESCE(SUM(p.total_points), 0)::int AS points,
 		       COALESCE(SUM(CASE WHEN NOT t.voided AND t.winner_participant_id = p.id THEN t.games ELSE 0 END), 0)::int AS wins,
 		       COALESCE(SUM(CASE WHEN NOT t.voided AND t.winner_participant_id <> p.id THEN t.games ELSE 0 END), 0)::int AS losses,
-		       COALESCE(SUM(t.games), 0)::int AS games
+		       COALESCE(SUM(t.games), 0)::int AS games,
+		       COALESCE(SUM((SELECT COALESCE(SUM(re.knocks), 0) FROM round_entries re WHERE re.participant_id = p.id)), 0)::int AS knocks
 		FROM participants p
 		JOIN tournaments t ON t.id = p.tournament_id AND t.mode = '1x1' AND t.status = 'finished'
 		   AND ($1 = '' OR t.season_id = $1)
@@ -52,7 +53,7 @@ func (s *Store) Leaderboard(ctx context.Context, mode, seasonID string) ([]model
 	out := []models.LeaderboardRow{}
 	for rows.Next() {
 		var r models.LeaderboardRow
-		if err := rows.Scan(&r.UserID, &r.Login, &r.DisplayName, &r.AvatarURL, &r.Mmr, &r.Points, &r.Wins, &r.Losses, &r.Tournaments); err != nil {
+		if err := rows.Scan(&r.UserID, &r.Login, &r.DisplayName, &r.AvatarURL, &r.Mmr, &r.Points, &r.Wins, &r.Losses, &r.Tournaments, &r.Knocks); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -74,6 +75,13 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 		       COALESCE(SUM(CASE WHEN h.delta > 0 AND NOT t.voided THEN t.games ELSE 0 END), 0)::int AS wins,
 		       COALESCE(SUM(CASE WHEN h.delta < 0 AND NOT t.voided THEN t.games ELSE 0 END), 0)::int AS losses,
 		       COALESCE(SUM(CASE WHEN h.delta <> 0 OR t.voided THEN t.games ELSE 0 END), 0)::int AS games,
+		       (SELECT COALESCE(SUM(re.knocks), 0)
+		        FROM participants p
+		        JOIN tournaments t2 ON t2.id = p.tournament_id AND t2.mode = '2x2' AND t2.status = 'finished'
+		           AND ($1 = '' OR t2.season_id = $1)
+		        JOIN round_entries re ON re.participant_id = p.id
+		        WHERE p.members @> jsonb_build_array(jsonb_build_object('userId', tm.member_a), jsonb_build_object('userId', tm.member_b))
+		       )::int AS knocks,
 		       ua.id, ua.login, ua.display_name, ua.avatar_url,
 		       ub.id, ub.login, ub.display_name, ub.avatar_url
 		FROM team_mmr tm
@@ -96,7 +104,7 @@ func (s *Store) TeamLeaderboard(ctx context.Context, seasonID string) ([]models.
 	for rows.Next() {
 		var r models.TeamLeaderboardRow
 		var a, b models.TeamMember
-		if err := rows.Scan(&r.TeamKey, &r.Name, &r.Mmr, &r.Wins, &r.Losses, &r.Games,
+		if err := rows.Scan(&r.TeamKey, &r.Name, &r.Mmr, &r.Wins, &r.Losses, &r.Games, &r.Knocks,
 			&a.UserID, &a.Login, &a.DisplayName, &a.AvatarURL,
 			&b.UserID, &b.Login, &b.DisplayName, &b.AvatarURL); err != nil {
 			return nil, err
