@@ -91,15 +91,24 @@ type TagHolder struct {
 // Season — период рейтинга. Ровно один active одновременно; завершённый имеет ended_at.
 // MMR считается внутри сезона: все начинают со StartMmr, шаг Эло задаёт KFactor.
 type Season struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Status    string     `json:"status"` // active | finished
-	StartedAt time.Time  `json:"startedAt"`
-	EndedAt   *time.Time `json:"endedAt,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	KFactor   int        `json:"kFactor"`
-	StartMmr  int        `json:"startMmr"`
-	Number    *int       `json:"number,omitempty"` // для адреса страницы итогов /season/{номер}
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	Status    string       `json:"status"` // active | finished
+	StartedAt time.Time    `json:"startedAt"`
+	EndedAt   *time.Time   `json:"endedAt,omitempty"`
+	CreatedAt time.Time    `json:"createdAt"`
+	KFactor   int          `json:"kFactor"`
+	StartMmr  int          `json:"startMmr"`
+	Number    *int         `json:"number,omitempty"` // для адреса страницы итогов /season/{номер}
+	Prizes    SeasonPrizes `json:"prizes"`
+}
+
+// SeasonPrizes - призовой фонд сезона: Places - рубли за места по порядку, Pool - весь фонд
+// (0 - сумма мест), Note - подпись под призами, например про способ выплаты.
+type SeasonPrizes struct {
+	Pool   int    `json:"pool"`
+	Places []int  `json:"places"`
+	Note   string `json:"note"`
 }
 
 // MapInfo - карта из справочника (пики-баны, задания на карту, превью).

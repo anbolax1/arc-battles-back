@@ -84,11 +84,12 @@ func (s *Server) handleStartSeason(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body struct {
-		Name      string     `json:"name"`
-		StartedAt time.Time  `json:"startedAt"`
-		EndedAt   *time.Time `json:"endedAt"`
-		KFactor   int        `json:"kFactor"`
-		StartMmr  int        `json:"startMmr"`
+		Name      string              `json:"name"`
+		StartedAt time.Time           `json:"startedAt"`
+		EndedAt   *time.Time          `json:"endedAt"`
+		KFactor   int                 `json:"kFactor"`
+		StartMmr  int                 `json:"startMmr"`
+		Prizes    models.SeasonPrizes `json:"prizes"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "некорректный JSON")
@@ -111,6 +112,11 @@ func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	prizes, msg := normSeasonPrizes(body.Prizes)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
 	prev, err := s.Store.GetSeason(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "сезон не найден")
@@ -120,7 +126,7 @@ func (s *Server) handleUpdateSeason(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	sn, err := s.Store.UpdateSeason(r.Context(), id, name, body.StartedAt, body.EndedAt, body.KFactor, body.StartMmr)
+	sn, err := s.Store.UpdateSeason(r.Context(), id, name, body.StartedAt, body.EndedAt, body.KFactor, body.StartMmr, prizes)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "сезон не найден")
 		return
@@ -163,6 +169,36 @@ func (s *Server) handleDeleteSeason(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Пределы призового фонда: мест не больше, чем ступеней на главной, сумма - в разумных рублях.
+const (
+	maxPrizePlaces = 8
+	maxPrizeAmount = 100_000_000
+	maxPrizeNote   = 300
+)
+
+// normSeasonPrizes проверяет призы сезона и приводит их к виду для сохранения.
+func normSeasonPrizes(p models.SeasonPrizes) (models.SeasonPrizes, string) {
+	if len(p.Places) > maxPrizePlaces {
+		return p, "мест с призами — не больше 8"
+	}
+	if p.Pool < 0 || p.Pool > maxPrizeAmount {
+		return p, "призовой фонд — от 0 до 100 000 000 ₽"
+	}
+	places := make([]int, 0, len(p.Places))
+	for _, v := range p.Places {
+		if v < 0 || v > maxPrizeAmount {
+			return p, "приз за место — от 0 до 100 000 000 ₽"
+		}
+		places = append(places, v)
+	}
+	p.Places = places
+	p.Note = strings.TrimSpace(p.Note)
+	if len([]rune(p.Note)) > maxPrizeNote {
+		return p, "подпись под призами — не длиннее 300 знаков"
+	}
+	return p, ""
 }
 
 // validSeasonRating проверяет правила рейтинга сезона; 0 - значение по умолчанию.

@@ -8,11 +8,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const seasonCols = `id, name, status, started_at, ended_at, created_at, k_factor, start_mmr, number`
+const seasonCols = `id, name, status, started_at, ended_at, created_at, k_factor, start_mmr, number, prize_pool, prize_places, prize_note`
 
 func scanSeason(row pgx.Row) (models.Season, error) {
 	var s models.Season
-	err := row.Scan(&s.ID, &s.Name, &s.Status, &s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.KFactor, &s.StartMmr, &s.Number)
+	err := row.Scan(&s.ID, &s.Name, &s.Status, &s.StartedAt, &s.EndedAt, &s.CreatedAt, &s.KFactor, &s.StartMmr, &s.Number, &s.Prizes.Pool, &s.Prizes.Places, &s.Prizes.Note)
+	if s.Prizes.Places == nil {
+		s.Prizes.Places = []int{}
+	}
 	return s, err
 }
 
@@ -77,13 +80,18 @@ func (s *Store) ActiveSeason(ctx context.Context) (models.Season, error) {
 	return sn, err
 }
 
-// UpdateSeason меняет название, даты и правила рейтинга сезона, не трогая его статус.
+// UpdateSeason меняет название, даты, правила рейтинга и призы сезона, не трогая его статус.
 // Дату окончания можно не задавать - у любого сезона, включая активный.
-func (s *Store) UpdateSeason(ctx context.Context, id, name string, startedAt time.Time, endedAt *time.Time, k, start int) (models.Season, error) {
+func (s *Store) UpdateSeason(ctx context.Context, id, name string, startedAt time.Time, endedAt *time.Time, k, start int, prizes models.SeasonPrizes) (models.Season, error) {
 	k, start = normSeasonRating(k, start)
+	if prizes.Places == nil {
+		prizes.Places = []int{}
+	}
 	sn, err := scanSeason(s.Pool.QueryRow(ctx,
-		`UPDATE seasons SET name = $2, started_at = $3, ended_at = $4, k_factor = $5, start_mmr = $6 WHERE id = $1 RETURNING `+seasonCols,
-		id, name, startedAt, endedAt, k, start))
+		`UPDATE seasons SET name = $2, started_at = $3, ended_at = $4, k_factor = $5, start_mmr = $6,
+		        prize_pool = $7, prize_places = $8, prize_note = $9
+		 WHERE id = $1 RETURNING `+seasonCols,
+		id, name, startedAt, endedAt, k, start, prizes.Pool, prizes.Places, prizes.Note))
 	if err == pgx.ErrNoRows {
 		return models.Season{}, ErrNotFound
 	}

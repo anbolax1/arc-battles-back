@@ -99,7 +99,7 @@ func TestChampionTagByEndDate(t *testing.T) {
 		}
 	}
 	setEnd := func(end *time.Time) {
-		if _, err := st.UpdateSeason(ctx, sn.ID, sn.Name, sn.StartedAt, end, sn.KFactor, sn.StartMmr); err != nil {
+		if _, err := st.UpdateSeason(ctx, sn.ID, sn.Name, sn.StartedAt, end, sn.KFactor, sn.StartMmr, sn.Prizes); err != nil {
 			t.Fatalf("UpdateSeason: %v", err)
 		}
 		sync()
