@@ -164,6 +164,10 @@ func (s *Server) Router() http.Handler {
 			r.Post("/queue/sessions/{id}/match/finish", s.handleQueueMatchFinish)
 			r.Post("/queue/sessions/{id}/match/cancel", s.handleQueueMatchCancel)
 			r.Get("/queue/sessions/{id}/events", s.handleQueueEvents)
+			// Кулдауны после матча: игроки, свои правила, снять или поставить вручную, журнал правок.
+			r.Get("/cooldowns", s.handleCooldowns)
+			r.Get("/cooldowns/log", s.handleCooldownLog)
+			r.Post("/cooldowns/players/{id}", s.handleChangeCooldown)
 			// Списки игроков и команд нужны модератору, чтобы добавлять в очередь вручную.
 			r.Get("/match-players", s.handleListMatchPlayers)
 			r.Get("/match-teams", s.handleListMatchTeams)
@@ -234,6 +238,8 @@ func (s *Server) Router() http.Handler {
 			// Дизайн сайта для всех посетителей: прежний или новый.
 			r.Put("/site/design", s.handleSetSiteDesign)
 			r.Put("/site/subscriber-role", s.handleSetSubscriberRole)
+			// Общая длительность кулдауна после матча - для всех, у кого нет своей.
+			r.Put("/cooldowns/default", s.handleSetCooldownDefault)
 
 			// Новости лиги: черновики, публикация по дате, картинка.
 			r.Get("/news/all", s.handleListAllNews)

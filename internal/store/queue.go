@@ -135,7 +135,7 @@ func (s *Store) QueueActiveID(ctx context.Context, format string) (string, error
 }
 
 // queueEntryRows - записи очереди с игроками по позициям; в блокирующих запросах db - транзакция.
-func queueEntryRows(ctx context.Context, db queryer, sessionID string) ([]models.QueueEntry, error) {
+func queueEntryRows(ctx context.Context, db queryer, sessionID string, now time.Time) ([]models.QueueEntry, error) {
 	rows, err := db.Query(ctx, `
 		SELECT e.id, e.position, e.status, e.team_key, e.team_name, e.joined_at, e.performed_count, e.skipped_count,
 		       e.invited_at, e.invite_expires_at, e.added_by IS NOT NULL
@@ -165,22 +165,39 @@ func queueEntryRows(ctx context.Context, db queryer, sessionID string) ([]models
 	}
 	rows.Close()
 
-	members, err := queueMembers(ctx, db, sessionID)
+	members, err := queueMembers(ctx, db, sessionID, now)
 	if err != nil {
 		return nil, err
 	}
 	for i := range out {
 		out[i].Members = members[out[i].ID]
-		for _, m := range out[i].Members {
-			if m.Today > out[i].TodayMatches {
-				out[i].TodayMatches = m.Today
-			}
-		}
+		summarizeEntry(&out[i])
 		if out[i].Name == "" && len(out[i].Members) > 0 {
 			out[i].Name = queueMemberName(out[i].Members[0])
 		}
 	}
 	return out, nil
+}
+
+// summarizeEntry - история записи по её игрокам: у команды матчей сегодня и последний матч - как у самого
+// игравшего, кулдаун - пока не кончится у обоих, новичок - только если новички оба.
+func summarizeEntry(e *models.QueueEntry) {
+	later := func(cur, t *time.Time) *time.Time {
+		if t != nil && (cur == nil || t.After(*cur)) {
+			return t
+		}
+		return cur
+	}
+	newbie, unknown := len(e.Members) > 0, false
+	for _, m := range e.Members {
+		e.TodayMatches = max(e.TodayMatches, m.Today)
+		e.LastMatchAt = later(e.LastMatchAt, m.LastMatchAt)
+		e.CooldownUntil = later(e.CooldownUntil, m.CooldownUntil)
+		newbie = newbie && m.Newbie
+		unknown = unknown || m.HistoryUnknown
+	}
+	e.Newbie = newbie
+	e.HistoryUnknown = e.LastMatchAt == nil && unknown
 }
 
 func queueMemberName(m models.QueueMember) string {
@@ -191,13 +208,9 @@ func queueMemberName(m models.QueueMember) string {
 }
 
 // queueMembers - игроки записей сессии, у которых запись ещё в очереди.
-func queueMembers(ctx context.Context, db queryer, sessionID string) (map[string][]models.QueueMember, error) {
+func queueMembers(ctx context.Context, db queryer, sessionID string, now time.Time) (map[string][]models.QueueMember, error) {
 	rows, err := db.Query(ctx, `
-		SELECT m.entry_id, u.id, u.login, u.display_name, u.avatar_url, m.ready_at,
-		       (SELECT c.value FROM stat_claims c WHERE c.user_id = u.id AND c.kind = 'hours' AND c.status = 'approved'
-		        ORDER BY c.created_at DESC LIMIT 1),
-		       (SELECT c.value FROM stat_claims c WHERE c.user_id = u.id AND c.kind = 'knocks' AND c.status = 'approved'
-		        ORDER BY c.created_at DESC LIMIT 1)
+		SELECT m.entry_id, u.id, u.login, u.display_name, u.avatar_url, m.ready_at
 		FROM queue_entry_members m JOIN users u ON u.id = m.user_id
 		WHERE m.session_id = $1 AND m.entry_id IN (SELECT id FROM queue_entries WHERE session_id = $1 AND position IS NOT NULL)
 		ORDER BY m.entry_id, lower(COALESCE(NULLIF(u.display_name, ''), u.login)), u.id`, sessionID)
@@ -209,7 +222,7 @@ func queueMembers(ctx context.Context, db queryer, sessionID string) (map[string
 	for rows.Next() {
 		var entryID string
 		var m models.QueueMember
-		if err := rows.Scan(&entryID, &m.UserID, &m.Login, &m.DisplayName, &m.AvatarURL, &m.ReadyAt, &m.Hours, &m.Knocks); err != nil {
+		if err := rows.Scan(&entryID, &m.UserID, &m.Login, &m.DisplayName, &m.AvatarURL, &m.ReadyAt); err != nil {
 			return nil, err
 		}
 		m.Ready = m.ReadyAt != nil
@@ -218,23 +231,46 @@ func queueMembers(ctx context.Context, db queryer, sessionID string) (map[string
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows.Close() // дальше запрос на том же соединении
-	var users []string
-	for _, ms := range out {
-		for _, m := range ms {
-			users = append(users, m.UserID)
-		}
-	}
-	today, err := queueTodayMatches(ctx, db, users)
-	if err != nil {
-		return nil, err
-	}
+	rows.Close() // дальше запросы на том же соединении
+	var all []*models.QueueMember
 	for _, ms := range out {
 		for i := range ms {
-			ms[i].Today = today[ms[i].UserID]
+			all = append(all, &ms[i])
 		}
 	}
-	return out, nil
+	return out, fillQueueMembers(ctx, db, all, now)
+}
+
+// fillQueueMembers дописывает игрокам часы и ноки так же, как их показывает профиль, историю выступлений
+// и кулдаун - по нескольку запросов на всех сразу, а не на каждого.
+func fillQueueMembers(ctx context.Context, db queryer, members []*models.QueueMember, now time.Time) error {
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		ids = append(ids, m.UserID)
+	}
+	players, err := queuePlayersOf(ctx, db, ids, now, true)
+	if err != nil {
+		return err
+	}
+	stats, err := gameStatsOf(ctx, db, ids)
+	if err != nil {
+		return err
+	}
+	for _, m := range members {
+		p, st := players[m.UserID], stats[m.UserID]
+		m.Today, m.TotalMatches, m.LastMatchAt = p.History.Today, p.History.Total, p.History.LastPtr()
+		m.Newbie, m.HistoryUnknown = p.History.Newbie(), p.History.Unknown
+		m.CooldownUntil = p.CooldownPtr()
+		if st.Hours != nil {
+			v := st.Hours.Value
+			m.Hours, m.HoursConfirmed = &v, st.Hours.Confirmed
+		}
+		if st.Knocks != nil {
+			v := st.Knocks.Value
+			m.Knocks, m.KnocksConfirmed = &v, st.Knocks.Confirmed
+		}
+	}
+	return nil
 }
 
 // queueMmrs - MMR записей в текущем сезоне: игрока для 1×1, команды для 2×2. Не игравшие - со старта сезона.
@@ -406,8 +442,12 @@ func (s *Store) QueueSnapshotFor(ctx context.Context, sessionID, viewer string) 
 	}
 	defer tx.Rollback(ctx)
 
-	snap := &models.QueueSnapshot{ServerTime: time.Now().UTC(), Entries: []models.QueueEntry{}}
+	now := time.Now()
+	snap := &models.QueueSnapshot{ServerTime: now.UTC(), Entries: []models.QueueEntry{}}
 	if snap.Active, err = activeQueueRefs(ctx, tx); err != nil {
+		return nil, err
+	}
+	if snap.CooldownMinutes, err = cooldownDefault(ctx, tx); err != nil {
 		return nil, err
 	}
 	if sessionID == "" {
@@ -419,7 +459,7 @@ func (s *Store) QueueSnapshotFor(ctx context.Context, sessionID, viewer string) 
 		return nil, err
 	}
 	snap.Session = &sess
-	if snap.Entries, err = queueEntryRows(ctx, tx, sessionID); err != nil {
+	if snap.Entries, err = queueEntryRows(ctx, tx, sessionID, now); err != nil {
 		return nil, err
 	}
 	mmrs, err := s.queueMmrs(ctx, tx, sess.Format, snap.Entries)
@@ -445,7 +485,7 @@ func (s *Store) QueueSnapshotFor(ctx context.Context, sessionID, viewer string) 
 				e.Priority = true
 			}
 		}
-		items[i] = queueItem{ID: e.ID, Status: e.Status, Today: e.TodayMatches}
+		items[i] = queueItem{ID: e.ID, Status: e.Status, Today: e.TodayMatches, Cooldown: e.CooldownUntil != nil}
 	}
 	if sess.State != "finished" {
 		if next, ok := qNext(items); ok {
@@ -480,14 +520,14 @@ func (s *Store) QueueSnapshotFor(ctx context.Context, sessionID, viewer string) 
 			break
 		}
 	}
-	if snap.Me, err = s.queueMe(ctx, tx, &sess, snap.Entries, viewer); err != nil {
+	if snap.Me, err = s.queueMe(ctx, tx, &sess, snap.Entries, viewer, now); err != nil {
 		return nil, err
 	}
 	return snap, nil
 }
 
 // queueMe считает для игрока его место, соседей и возможность записаться.
-func (s *Store) queueMe(ctx context.Context, db queryer, sess *models.QueueSession, entries []models.QueueEntry, viewer string) (*models.QueueMe, error) {
+func (s *Store) queueMe(ctx context.Context, db queryer, sess *models.QueueSession, entries []models.QueueEntry, viewer string, now time.Time) (*models.QueueMe, error) {
 	me := &models.QueueMe{}
 	if sess.State == "finished" {
 		me.JoinBlocked = "Сессия завершена"
@@ -525,9 +565,21 @@ func (s *Store) queueMe(ctx context.Context, db queryer, sess *models.QueueSessi
 				me.NeedsConfirm = !m.Ready
 				me.Confirmed = m.Ready
 			}
+			if m.UserID == viewer {
+				me.CooldownUntil = m.CooldownUntil
+			}
 		}
 		return me, nil
 	}
+	players, err := queuePlayersOf(ctx, db, []string{viewer}, now, false)
+	if err != nil {
+		return nil, err
+	}
+	inMatch, err := playersInMatch(ctx, db, []string{viewer}, sess.ID)
+	if err != nil {
+		return nil, err
+	}
+	me.CooldownUntil, me.InMatch, me.TodayMatches = players[viewer].CooldownPtr(), inMatch[viewer], players[viewer].History.Today
 	switch {
 	case sess.State == "paused":
 		me.JoinBlocked = "Очередь приостановлена организатором"
@@ -535,6 +587,10 @@ func (s *Store) queueMe(ctx context.Context, db queryer, sess *models.QueueSessi
 		me.JoinBlocked = "Запись закрыта организатором"
 	case len(entries) >= QueueMaxEntries:
 		me.JoinBlocked = "Очередь заполнена"
+	case me.InMatch:
+		me.JoinBlocked = inMatchBlock(inMatch, nil, []string{viewer}, viewer, false)
+	case me.CooldownUntil != nil:
+		me.JoinBlocked = cooldownBlock(players, nil, []string{viewer}, viewer, false, now)
 	}
 	statsMsg, err := queueStatsBlock(ctx, db, viewer, []string{viewer})
 	if err != nil {
@@ -547,7 +603,7 @@ func (s *Store) queueMe(ctx context.Context, db queryer, sess *models.QueueSessi
 		}
 	}
 	if sess.Format == "2x2" {
-		teams, err := s.queueTeamOptions(ctx, db, entries, viewer)
+		teams, err := s.queueTeamOptions(ctx, db, sess.ID, entries, viewer, now)
 		if err != nil {
 			return nil, err
 		}
@@ -571,8 +627,9 @@ func (s *Store) queueMe(ctx context.Context, db queryer, sess *models.QueueSessi
 	return me, nil
 }
 
-// queueTeamOptions - команды игрока и можно ли ими записаться: ни команда, ни её игроки не должны стоять в очереди.
-func (s *Store) queueTeamOptions(ctx context.Context, db queryer, entries []models.QueueEntry, viewer string) ([]models.QueueTeamOption, error) {
+// queueTeamOptions - команды игрока и можно ли ими записаться: игроки команды не стоят в очереди, не играют
+// сейчас и не на кулдауне, часы и ноки у них подтверждены.
+func (s *Store) queueTeamOptions(ctx context.Context, db queryer, sessionID string, entries []models.QueueEntry, viewer string, now time.Time) ([]models.QueueTeamOption, error) {
 	rows, err := db.Query(ctx, `
 		SELECT t.team_key, t.name, ua.id, ua.login, ua.display_name, ua.avatar_url, ub.id, ub.login, ub.display_name, ub.avatar_url
 		FROM teams t JOIN users ua ON ua.id = t.member_a JOIN users ub ON ub.id = t.member_b
@@ -605,11 +662,37 @@ func (s *Store) queueTeamOptions(ctx context.Context, db queryer, entries []mode
 		return nil, err
 	}
 	rows.Close() // дальше запросы на том же соединении
+	var ids []string
+	names := map[string]string{}
+	for _, t := range out {
+		for _, m := range t.Members {
+			ids = append(ids, m.UserID)
+			names[m.UserID] = queueMemberName(m)
+		}
+	}
+	players, err := queuePlayersOf(ctx, db, ids, now, false)
+	if err != nil {
+		return nil, err
+	}
+	inMatch, err := playersInMatch(ctx, db, ids, sessionID)
+	if err != nil {
+		return nil, err
+	}
 	for i := range out {
+		users := []string{out[i].Members[0].UserID, out[i].Members[1].UserID}
+		if end := summarize(players, users).Cooldown; !end.IsZero() {
+			out[i].CooldownUntil = &end
+		}
 		if out[i].Blocked != "" {
 			continue
 		}
-		msg, err := queueStatsBlock(ctx, db, viewer, []string{out[i].Members[0].UserID, out[i].Members[1].UserID})
+		if out[i].Blocked = inMatchBlock(inMatch, names, users, viewer, false); out[i].Blocked != "" {
+			continue
+		}
+		if out[i].Blocked = cooldownBlock(players, names, users, viewer, false, now); out[i].Blocked != "" {
+			continue
+		}
+		msg, err := queueStatsBlock(ctx, db, viewer, users)
 		if err != nil {
 			return nil, err
 		}

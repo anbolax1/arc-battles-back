@@ -578,6 +578,7 @@ func (s *Server) handleFinishMatch(w http.ResponseWriter, r *http.Request) {
 	if queued {
 		s.settleQueueMatch(r.Context(), qref, actorID(r), true)
 	}
+	s.afterMatchFinished(r.Context(), id, actorID(r))
 	s.flashPatches(r.Context(), id, s.syncPatches(r.Context()))
 	s.writeMatch(w, r, id, http.StatusOK)
 }
@@ -597,6 +598,7 @@ func (s *Server) handleCancelMatch(w http.ResponseWriter, r *http.Request) {
 	if queued {
 		s.settleQueueMatch(r.Context(), qref, actorID(r), false)
 	}
+	s.publishAllQueues(r.Context()) // игроки матча снова могут встать в очередь
 	s.Media.Remove(preview)
 	s.syncPatches(r.Context())
 	if env, err := s.stateEnvelope(s.overlayStateBytes(r.Context())); err == nil {

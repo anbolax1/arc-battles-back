@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/battle-for-respect/backend/internal/models"
@@ -136,6 +137,9 @@ type qEntry struct {
 	Skipped   int
 	TeamKey   string
 	Label     string
+	Joined    time.Time
+	Cooldown  time.Time // конец кулдауна у игроков записи; нулевое - кулдауна нет
+	Users     []string
 }
 
 // load читает записи в очереди по позициям (с названиями) и заодно список для расчёта порядка.
@@ -144,7 +148,8 @@ func (q *qtx) load() ([]queueItem, map[string]*qEntry, error) {
 		SELECT e.id, e.status, e.position, e.performed_count, e.skipped_count, COALESCE(e.team_key, ''),
 		       COALESCE(NULLIF(e.team_name, ''), (
 		           SELECT string_agg(COALESCE(NULLIF(u.display_name, ''), u.login), ' & ' ORDER BY u.login)
-		           FROM queue_entry_members m JOIN users u ON u.id = m.user_id WHERE m.entry_id = e.id), '')
+		           FROM queue_entry_members m JOIN users u ON u.id = m.user_id WHERE m.entry_id = e.id), ''),
+		       e.joined_at
 		FROM queue_entries e WHERE e.session_id = $1 AND e.position IS NOT NULL ORDER BY e.position`, q.sess.ID)
 	if err != nil {
 		return nil, nil, err
@@ -154,10 +159,10 @@ func (q *qtx) load() ([]queueItem, map[string]*qEntry, error) {
 	byID := map[string]*qEntry{}
 	for rows.Next() {
 		e := &qEntry{}
-		if err := rows.Scan(&e.ID, &e.Status, &e.Position, &e.Performed, &e.Skipped, &e.TeamKey, &e.Label); err != nil {
+		if err := rows.Scan(&e.ID, &e.Status, &e.Position, &e.Performed, &e.Skipped, &e.TeamKey, &e.Label, &e.Joined); err != nil {
 			return nil, nil, err
 		}
-		items = append(items, queueItem{ID: e.ID, Status: e.Status})
+		items = append(items, queueItem{ID: e.ID, Status: e.Status, Joined: e.Joined})
 		byID[e.ID] = e
 	}
 	if err := rows.Err(); err != nil {
@@ -165,27 +170,29 @@ func (q *qtx) load() ([]queueItem, map[string]*qEntry, error) {
 	}
 	rows.Close() // дальше запросы на той же транзакции
 
-	// Порядок строится по матчам игроков за сегодня: кто сегодня уже играл, стоит позади тех, кто нет.
+	// Порядок строится по матчам игроков: кто сегодня уже играл, стоит позади тех, кто нет, а среди сыгравших
+	// выше тот, кто играл давнее. Записи с кулдауном стоят на месте, но их не вызывают.
 	mrows, err := q.tx.Query(q.ctx, `SELECT entry_id, user_id FROM queue_entry_members WHERE session_id = $1 AND active`, q.sess.ID)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer mrows.Close()
-	byEntry := map[string][]string{}
 	var all []string
 	for mrows.Next() {
 		var entry, user string
 		if err := mrows.Scan(&entry, &user); err != nil {
 			return nil, nil, err
 		}
-		byEntry[entry] = append(byEntry[entry], user)
+		if e, ok := byID[entry]; ok {
+			e.Users = append(e.Users, user)
+		}
 		all = append(all, user)
 	}
 	if err := mrows.Err(); err != nil {
 		return nil, nil, err
 	}
 	mrows.Close()
-	today, err := queueTodayMatches(q.ctx, q.tx, all)
+	players, err := queuePlayersOf(q.ctx, q.tx, all, time.Now(), false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -195,10 +202,11 @@ func (q *qtx) load() ([]queueItem, map[string]*qEntry, error) {
 	}
 	for i := range items {
 		e := byID[items[i].ID]
-		e.Today = maxToday(today, byEntry[e.ID])
-		items[i].Today = e.Today
+		sum := summarize(players, e.Users)
+		e.Today, e.Cooldown = sum.Today, sum.Cooldown
+		items[i].Today, items[i].Last, items[i].Cooldown = sum.Today, sum.Last, !sum.Cooldown.IsZero()
 		if e.Today == 0 && qEligible(e.Status) {
-			items[i].Prio = earliestPrio(prio, byEntry[e.ID])
+			items[i].Prio = earliestPrio(prio, e.Users)
 		}
 	}
 	return items, byID, nil
@@ -587,6 +595,28 @@ func (s *Store) JoinQueue(ctx context.Context, sessionID, actor string, in Queue
 			return err
 		}
 
+		// Игрок в матче или на кулдауне не записывается ни сам, ни руками организатора: кулдаун снимают
+		// в его разделе кабинета, и это остаётся в журнале.
+		now := time.Now()
+		names, err := userLabels(q.ctx, q.tx, members)
+		if err != nil {
+			return err
+		}
+		inMatch, err := playersInMatch(q.ctx, q.tx, members, q.sess.ID)
+		if err != nil {
+			return err
+		}
+		if msg := inMatchBlock(inMatch, names, members, in.UserID, in.ByOrganizer); msg != "" {
+			return qState(msg)
+		}
+		players, err := queuePlayersOf(q.ctx, q.tx, members, now, false)
+		if err != nil {
+			return err
+		}
+		if msg := cooldownBlock(players, names, members, in.UserID, in.ByOrganizer, now); msg != "" {
+			return qState(msg)
+		}
+
 		// Сам игрок записывается только с подтверждёнными часами и ноками; организатор может добавить и без них.
 		if !in.ByOrganizer {
 			msg, err := queueStatsBlock(q.ctx, q.tx, in.UserID, members)
@@ -612,10 +642,11 @@ func (s *Store) JoinQueue(ctx context.Context, sessionID, actor string, in Queue
 			return err
 		}
 		var entryID string
+		var joined time.Time
 		err = q.tx.QueryRow(q.ctx, `
 			INSERT INTO queue_entries (session_id, team_key, team_name, position, added_by, performed_count)
 			VALUES ($1, NULLIF($2, ''), $3, (SELECT COALESCE(MAX(position), 0) + 1 FROM queue_entries WHERE session_id = $1), $4, $5)
-			RETURNING id`, q.sess.ID, teamKey, teamName, by, performed).Scan(&entryID)
+			RETURNING id, joined_at`, q.sess.ID, teamKey, teamName, by, performed).Scan(&entryID, &joined)
 		if err != nil {
 			return err
 		}
@@ -628,11 +659,8 @@ func (s *Store) JoinQueue(ctx context.Context, sessionID, actor string, in Queue
 				return err
 			}
 		}
-		todayMatches, err := queueTodayMatches(q.ctx, q.tx, members)
-		if err != nil {
-			return err
-		}
-		item := queueItem{ID: entryID, Status: QEntryWaiting, Today: maxToday(todayMatches, members)}
+		sum := summarize(players, members)
+		item := queueItem{ID: entryID, Status: QEntryWaiting, Today: sum.Today, Last: sum.Last, Joined: joined}
 		if item.Today == 0 {
 			// Активированный сегодня «Без очереди» действует и на тех, кто встал в очередь позже.
 			prio, err := queuePriorityTimes(q.ctx, q.tx, members)
@@ -776,6 +804,9 @@ func (s *Store) CallEntry(ctx context.Context, sessionID, actor, entryID string)
 		if entryID == "" {
 			next, ok := qNext(items)
 			if !ok {
+				if slices.ContainsFunc(items, func(it queueItem) bool { return qEligible(it.Status) }) {
+					return qState("Все, кто ждёт, сейчас на кулдауне - вызвать можно, когда он закончится")
+				}
 				return qState("В очереди некого вызывать")
 			}
 			e = byID[next.ID]
@@ -784,6 +815,10 @@ func (s *Store) CallEntry(ctx context.Context, sessionID, actor, entryID string)
 		}
 		if !qEligible(e.Status) {
 			return qState("Эту запись уже вызвали")
+		}
+		if !e.Cooldown.IsZero() {
+			return qState(fmt.Sprintf("У %s кулдаун до %s МСК - вызвать можно после него или сняв кулдаун в разделе «Кулдауны»",
+				e.Label, mskClock(e.Cooldown, time.Now())))
 		}
 		if m == nil {
 			m = &qMatchRow{Status: "preparing"}
@@ -1133,6 +1168,96 @@ func (s *Store) SettleQueueMatch(ctx context.Context, ref QueueMatchRef, actor s
 		return QueueResult{}, false, nil
 	}
 	return res, err == nil, err
+}
+
+// QueueAfterMatch переставляет в живых очередях записи игроков только что завершённого матча сайта: у них вырос
+// счёт матчей за сегодня, поэтому они встают среди сыгравших по времени последнего матча, а кулдаун не даёт
+// их вызвать. Записи самого матча очереди к этому моменту уже вышли из неё. Отдаёт изменённые очереди.
+func (s *Store) QueueAfterMatch(ctx context.Context, tournamentID, actor string) ([]QueueResult, error) {
+	var users []string
+	err := s.Pool.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(DISTINCT uid), '{}') FROM (
+			SELECT p.user_id AS uid FROM participants p WHERE p.tournament_id = $1 AND p.user_id IS NOT NULL
+			UNION
+			SELECT m ->> 'userId' FROM participants p,
+			       jsonb_array_elements(CASE WHEN jsonb_typeof(p.members) = 'array' THEN p.members ELSE '[]'::jsonb END) m
+			WHERE p.tournament_id = $1 AND COALESCE(m ->> 'userId', '') <> '') x`, tournamentID).Scan(&users)
+	if err != nil || len(users) == 0 {
+		return nil, err
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT m.session_id FROM queue_entry_members m
+		JOIN queue_sessions qs ON qs.id = m.session_id AND qs.status = 'active'
+		WHERE m.user_id = ANY($1) AND m.active`, users)
+	if err != nil {
+		return nil, err
+	}
+	var sessions []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		sessions = append(sessions, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []QueueResult
+	for _, sid := range sessions {
+		res, err := s.queueTx(ctx, sid, actor, func(q *qtx) error {
+			items, byID, err := q.load()
+			if err != nil {
+				return err
+			}
+			moved := false
+			for _, it := range slices.Clone(items) {
+				e := byID[it.ID]
+				if !qEligible(e.Status) || !slices.ContainsFunc(e.Users, func(u string) bool { return slices.Contains(users, u) }) {
+					continue
+				}
+				from := qIndex(items, e.ID) + 1
+				items = qPlaceAfterMatch(items, items[from-1])
+				if err := q.event("played_elsewhere", e.ID, "", e.Label, map[string]any{"from": from, "to": qIndex(items, e.ID) + 1}); err != nil {
+					return err
+				}
+				moved = true
+			}
+			if !moved {
+				return errQueueNothing
+			}
+			return q.writeOrder(items)
+		})
+		if errors.Is(err, errQueueNothing) {
+			continue
+		}
+		if err != nil {
+			return out, err
+		}
+		out = append(out, res)
+	}
+	return out, nil
+}
+
+// ActiveQueueResults - живые очереди с их ревизиями: после событий вне очереди (правка кулдауна, матч)
+// страницы очередей перечитывают состояние.
+func (s *Store) ActiveQueueResults(ctx context.Context) ([]QueueResult, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, format, rev FROM queue_sessions WHERE status = 'active'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QueueResult
+	for rows.Next() {
+		var r QueueResult
+		if err := rows.Scan(&r.SessionID, &r.Format, &r.Rev); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (q *qtx) cancelMatch(m *qMatchRow, reason string) error {

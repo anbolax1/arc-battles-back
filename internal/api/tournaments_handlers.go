@@ -112,6 +112,8 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// Статус до правки: завершение матча здесь, как и в пульте, начинает кулдаун его игроков.
+	before, _ := s.Store.TournamentStatus(r.Context(), id)
 	if body.Status != nil {
 		// Старый статус — чтобы побочные эффекты (авто-победитель, начисление/откат MMR) срабатывали
 		// ТОЛЬКО при фактическом ПЕРЕХОДЕ статуса, а не на повторном PATCH с тем же значением.
@@ -149,6 +151,11 @@ func (s *Server) handleUpdateTournament(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.Status != nil || body.WinnerParticipantID != nil {
 		s.syncPatches(r.Context())
+		if after, _ := s.Store.TournamentStatus(r.Context(), id); after == "finished" && before != "finished" {
+			s.afterMatchFinished(r.Context(), id, actorID(r))
+		} else if after != before {
+			s.publishAllQueues(r.Context())
+		}
 	}
 	t, err := s.Store.GetTournament(r.Context(), id)
 	if err != nil {
@@ -173,6 +180,7 @@ func (s *Server) handleDeleteTournament(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Media.Remove(preview)
 	s.syncPatches(r.Context())
+	s.publishAllQueues(r.Context()) // с матчем могли уйти и кулдаун, и «последний матч» его игроков
 	w.WriteHeader(http.StatusNoContent)
 }
 

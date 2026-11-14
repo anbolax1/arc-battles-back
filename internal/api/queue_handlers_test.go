@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +50,36 @@ func lockQueueTests(t *testing.T, url string) {
 	})
 }
 
+// setTestCooldown ставит общий кулдаун на время теста, а после возвращает прежний.
+func setTestCooldown(t *testing.T, minutes int) {
+	t.Helper()
+	ctx := context.Background()
+	url := os.Getenv("RESPECT_TEST_DB")
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatalf("кулдаун: %v", err)
+	}
+	defer conn.Close(ctx)
+	var prev *string
+	_ = conn.QueryRow(ctx, `SELECT value FROM site_settings WHERE key = 'queue_cooldown_minutes'`).Scan(&prev)
+	if _, err := conn.Exec(ctx, `INSERT INTO site_settings (key, value) VALUES ('queue_cooldown_minutes', $1)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(minutes)); err != nil {
+		t.Fatalf("кулдаун: %v", err)
+	}
+	t.Cleanup(func() {
+		conn, err := pgx.Connect(ctx, url)
+		if err != nil {
+			return
+		}
+		defer conn.Close(ctx)
+		if prev == nil {
+			_, _ = conn.Exec(ctx, `DELETE FROM site_settings WHERE key = 'queue_cooldown_minutes'`)
+			return
+		}
+		_, _ = conn.Exec(ctx, `UPDATE site_settings SET value = $1 WHERE key = 'queue_cooldown_minutes'`, *prev)
+	})
+}
+
 func newQueueAPI(t *testing.T) *queueAPI {
 	t.Helper()
 	url := os.Getenv("RESPECT_TEST_DB")
@@ -59,6 +90,8 @@ func newQueueAPI(t *testing.T) *queueAPI {
 		t.Fatalf("миграции: %v", err)
 	}
 	lockQueueTests(t, url)
+	// Кулдаун после матча проверяет свой тест; в остальных игрок записывается снова сразу после матча.
+	setTestCooldown(t, 0)
 	pool, err := db.Connect(context.Background(), url)
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +131,12 @@ func (a *queueAPI) actor(tag string, role models.Role) actor {
 	if _, err := a.st.Pool.Exec(context.Background(), `
 		INSERT INTO stat_claims (user_id, kind, value, screenshot, status)
 		VALUES ($1, 'hours', 150, 'x.png', 'approved'), ($1, 'knocks', 4000, 'x.png', 'approved')`, u.ID); err != nil {
+		a.t.Fatal(err)
+	}
+	// Аккаунт и токен появляются в одну секунду, а часы базы в Docker бывают впереди: без сдвига токен
+	// изредка выходит «выпущенным до» эпохи сессий, и сервер его не принимает.
+	if _, err := a.st.Pool.Exec(context.Background(), `
+		UPDATE users SET tokens_valid_after = tokens_valid_after - interval '1 minute' WHERE id = $1`, u.ID); err != nil {
 		a.t.Fatal(err)
 	}
 	tok, err := auth.IssueToken(a.secret, u.ID, string(role), time.Hour)

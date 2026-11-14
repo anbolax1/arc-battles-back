@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,37 @@ type queueEnv struct {
 	pool *pgxpool.Pool
 	st   *store.Store
 	uniq int64
+	url  string
+}
+
+// setTestCooldown ставит общий кулдаун на время теста, а после возвращает прежний. Соединение своё:
+// пул тест может закрыть раньше («перезапуск»).
+func setTestCooldown(t *testing.T, url string, minutes int) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatalf("кулдаун: %v", err)
+	}
+	defer conn.Close(ctx)
+	var prev *string
+	_ = conn.QueryRow(ctx, `SELECT value FROM site_settings WHERE key = 'queue_cooldown_minutes'`).Scan(&prev)
+	if _, err := conn.Exec(ctx, `INSERT INTO site_settings (key, value) VALUES ('queue_cooldown_minutes', $1)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, strconv.Itoa(minutes)); err != nil {
+		t.Fatalf("кулдаун: %v", err)
+	}
+	t.Cleanup(func() {
+		conn, err := pgx.Connect(ctx, url)
+		if err != nil {
+			return
+		}
+		defer conn.Close(ctx)
+		if prev == nil {
+			_, _ = conn.Exec(ctx, `DELETE FROM site_settings WHERE key = 'queue_cooldown_minutes'`)
+			return
+		}
+		_, _ = conn.Exec(ctx, `UPDATE site_settings SET value = $1 WHERE key = 'queue_cooldown_minutes'`, *prev)
+	})
 }
 
 // lockQueueTests делает так, чтобы очередные тесты разных пакетов шли по одному: живая очередь формата в базе одна.
@@ -61,7 +93,9 @@ func newQueueEnv(t *testing.T) *queueEnv {
 		t.Fatalf("подключение: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	e := &queueEnv{t: t, ctx: ctx, pool: pool, st: store.New(pool), uniq: time.Now().UnixNano()}
+	e := &queueEnv{t: t, ctx: ctx, pool: pool, st: store.New(pool), uniq: time.Now().UnixNano(), url: url}
+	// Кулдаун после матча проверяют свои тесты; в остальных игрок записывается снова сразу после матча.
+	setTestCooldown(t, url, 0)
 	// Хвосты упавших прогонов закрываем; живая очередь не наша - пропускаем тест.
 	if _, err := pool.Exec(ctx, `UPDATE queue_sessions SET status = 'finished', finished_at = now() WHERE status = 'active' AND title LIKE 'itest %'`); err != nil {
 		t.Fatal(err)

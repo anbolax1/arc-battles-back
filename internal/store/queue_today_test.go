@@ -21,7 +21,8 @@ func (e *queueEnv) playedMatch(a, b models.User, daysAgo int) {
 	}
 	if daysAgo > 0 {
 		if _, err := e.pool.Exec(e.ctx, `UPDATE tournaments SET created_at = now() - make_interval(days => $2),
-				starts_at = CASE WHEN starts_at IS NULL THEN NULL ELSE now() - make_interval(days => $2) END WHERE id = $1`, tm.ID, daysAgo); err != nil {
+				starts_at = CASE WHEN starts_at IS NULL THEN NULL ELSE now() - make_interval(days => $2) END,
+				finished_at = now() - make_interval(days => $2) WHERE id = $1`, tm.ID, daysAgo); err != nil {
 			e.t.Fatal(err)
 		}
 	}

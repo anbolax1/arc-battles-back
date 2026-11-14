@@ -93,28 +93,48 @@ func (s *Store) GetStatClaim(ctx context.Context, id string) (models.StatClaim, 
 
 // PlayerStatValues - часы и ноки для профиля: последнее не отклонённое число каждого вида.
 func (s *Store) PlayerStatValues(ctx context.Context, userID string) (hours, knocks *models.StatValue, err error) {
-	rows, err := s.Pool.Query(ctx, `
-		SELECT DISTINCT ON (kind) kind, value, status = 'approved'
-		FROM stat_claims WHERE user_id = $1 AND status <> 'rejected'
-		ORDER BY kind, created_at DESC`, userID)
+	all, err := gameStatsOf(ctx, s.Pool, []string{userID})
 	if err != nil {
 		return nil, nil, err
 	}
+	return all[userID].Hours, all[userID].Knocks, nil
+}
+
+// gameStats - часы и ноки игрока так, как их показывает профиль.
+type gameStats struct {
+	Hours, Knocks *models.StatValue
+}
+
+// gameStatsOf - часы и ноки сразу для многих игроков: профиль и очередь показывают одни и те же числа.
+func gameStatsOf(ctx context.Context, db queryer, userIDs []string) (map[string]gameStats, error) {
+	out := make(map[string]gameStats, len(userIDs))
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	rows, err := db.Query(ctx, `
+		SELECT DISTINCT ON (user_id, kind) user_id, kind, value, status = 'approved'
+		FROM stat_claims WHERE user_id = ANY($1) AND kind IN ('hours', 'knocks') AND status <> 'rejected'
+		ORDER BY user_id, kind, created_at DESC`, userIDs)
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	for rows.Next() {
-		var kind string
+		var user, kind string
 		var v models.StatValue
-		if err := rows.Scan(&kind, &v.Value, &v.Confirmed); err != nil {
-			return nil, nil, err
+		if err := rows.Scan(&user, &kind, &v.Value, &v.Confirmed); err != nil {
+			return nil, err
 		}
+		st := out[user]
 		switch kind {
 		case StatHours:
-			hours = &v
+			st.Hours = &v
 		case StatKnocks:
-			knocks = &v
+			st.Knocks = &v
 		}
+		out[user] = st
 	}
-	return hours, knocks, rows.Err()
+	return out, rows.Err()
 }
 
 // PlayerRegion - подтверждённый сервер игрока; пока модератор не подтвердил другой, это Европа.

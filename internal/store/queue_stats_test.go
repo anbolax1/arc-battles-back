@@ -66,10 +66,14 @@ func TestQueueRequiresConfirmedStats(t *testing.T) {
 	if me := e.snap(sid, p.ID).Me; me.NeedsStats || me.Position != 1 {
 		t.Errorf("me после записи: %+v", me)
 	}
-	// Ведущему видны подтверждённые числа, а не те, что ещё на проверке.
+	// В очереди те же числа, что в профиле: последнее не отклонённое, ещё не проверенное помечено.
 	m := e.snap(sid, "").Entries[0].Members[0]
-	if m.Hours == nil || *m.Hours != 120 || m.Knocks == nil || *m.Knocks != 3100 {
-		t.Errorf("часы и ноки в очереди: %+v / %+v", m.Hours, m.Knocks)
+	if m.Hours == nil || *m.Hours != 120 || !m.HoursConfirmed || m.Knocks == nil || *m.Knocks != 3500 || m.KnocksConfirmed {
+		t.Errorf("часы и ноки в очереди: %+v %v / %+v %v", m.Hours, m.HoursConfirmed, m.Knocks, m.KnocksConfirmed)
+	}
+	hours, knocks, err := e.st.PlayerStatValues(e.ctx, p.ID)
+	if err != nil || hours == nil || knocks == nil || hours.Value != *m.Hours || knocks.Value != *m.Knocks || knocks.Confirmed != m.KnocksConfirmed {
+		t.Errorf("в профиле другое: %+v / %+v %v", hours, knocks, err)
 	}
 
 	// Организатор добавляет и без часов и ноков: решение за ним, а у человека в списке пустые числа.
@@ -79,7 +83,7 @@ func TestQueueRequiresConfirmedStats(t *testing.T) {
 	}
 	last := e.snap(sid, "").Entries[1].Members[0]
 	if last.Hours != nil || last.Knocks != nil {
-		t.Errorf("у добавленного вручную нет подтверждённых чисел: %+v / %+v", last.Hours, last.Knocks)
+		t.Errorf("у добавленного вручную нет чисел в профиле: %+v / %+v", last.Hours, last.Knocks)
 	}
 }
 

@@ -158,3 +158,58 @@ func TestQueuePlacePriorityLeavesOthersInPlace(t *testing.T) {
 		t.Errorf("неизвестная запись: %v", got)
 	}
 }
+
+// Сыгравшие сегодня стоят по времени последнего матча: кто играл давнее, тот выше; при равенстве - кто раньше записался.
+func TestQueuePlaceNewPlayedByLastMatch(t *testing.T) {
+	t0 := time.Date(2026, 11, 14, 6, 0, 0, 0, time.UTC) // 09:00 МСК
+	at := func(min int) time.Time { return t0.Add(time.Duration(min) * time.Minute) }
+	played := func(id string, last, joined int) queueItem {
+		return queueItem{ID: id, Status: QEntryWaiting, Today: 1, Last: at(last), Joined: at(joined)}
+	}
+	// Пример организатора: A играл в 09:00, B в 10:30, C в 12:15, D сегодня не играл.
+	var items []queueItem
+	for _, it := range []queueItem{played("C", 195, 300), played("A", 0, 301), {ID: "D", Status: QEntryWaiting, Joined: at(302)}, played("B", 90, 303)} {
+		items = qPlaceNew(items, it)
+	}
+	if want := []string{"D", "A", "B", "C"}; !slices.Equal(ids(items), want) {
+		t.Fatalf("по последнему матчу: %v, want %v", ids(items), want)
+	}
+	// Тот же матч, что у B, но записался позже - встаёт сразу за B.
+	items = qPlaceNew(items, played("B2", 90, 304))
+	if want := []string{"D", "A", "B", "B2", "C"}; !slices.Equal(ids(items), want) {
+		t.Fatalf("равное время матча: %v, want %v", ids(items), want)
+	}
+}
+
+// Выше вызванных на матч не встаёт никто, даже если вызванный уже играл сегодня.
+func TestQueuePlaceNewNeverAboveInflight(t *testing.T) {
+	items := []queueItem{qi("x", QEntryInvited, 1), qi("y", QEntryReady, 2)}
+	if got, want := ids(qPlaceNew(items, qi("n", QEntryWaiting, 0))), []string{"x", "y", "n"}; !slices.Equal(got, want) {
+		t.Errorf("новичок при вызванных: %v, want %v", got, want)
+	}
+}
+
+// Сыгравший в другом месте встаёт среди сыгравших; вызванных не трогают.
+func TestQueuePlaceAfterMatch(t *testing.T) {
+	now := time.Now()
+	items := []queueItem{qi("a", QEntryWaiting, 0), qi("b", QEntryWaiting, 0), {ID: "c", Status: QEntryWaiting, Today: 1, Last: now.Add(-time.Hour)}}
+	moved := queueItem{ID: "a", Status: QEntryWaiting, Today: 1, Last: now}
+	if got, want := ids(qPlaceAfterMatch(items, moved)), []string{"b", "c", "a"}; !slices.Equal(got, want) {
+		t.Errorf("сыграл вне очереди: %v, want %v", got, want)
+	}
+	items[0].Status = QEntryInvited
+	if got := ids(qPlaceAfterMatch(items, moved)); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Errorf("вызванного переставили: %v", got)
+	}
+}
+
+// Запись на кулдауне не вызывают: следующей становится та, что за ней.
+func TestQueueNextSkipsCooldown(t *testing.T) {
+	items := []queueItem{{ID: "a", Status: QEntryWaiting, Cooldown: true}, qi("b", QEntrySkipped, 1), qi("c", QEntryWaiting, 0)}
+	if next, ok := qNext(items); !ok || next.ID != "b" {
+		t.Errorf("следующий = %v %v, want b", next.ID, ok)
+	}
+	if _, ok := qNext(items[:1]); ok {
+		t.Error("единственный на кулдауне не должен вызываться")
+	}
+}

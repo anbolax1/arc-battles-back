@@ -24,6 +24,11 @@ type queueItem struct {
 	// Prio - когда игрок активировал «Без очереди» (у команды - самый ранний из двоих). Нулевое значение - жетона нет.
 	// Заполняется только у ждущих записей, сегодня ещё не игравших: сыграв, запись встаёт в общий порядок.
 	Prio time.Time
+	// Last - когда завершился последний матч (у команды - самый поздний из двух): среди сыгравших сегодня
+	// выше тот, кто играл давнее. Joined - когда запись встала в очередь: решает при равном Last.
+	Last, Joined time.Time
+	// Cooldown - у кого-то из игроков идёт кулдаун: запись стоит на своём месте, но её не вызывают.
+	Cooldown bool
 }
 
 // qInMatch - запись вызвана на матч или выступает: она стоит в начале списка.
@@ -79,13 +84,38 @@ func qFreshEnd(items []queueItem) int {
 	return end
 }
 
-// qPlaceNew - новая запись: за всеми, кто сегодня ещё не играл, но перед теми, кто уже сыграл. Сыгравший сегодня
-// встаёт в самый конец, поэтому выйти и записаться заново, чтобы обойти очередь, нельзя.
+// qPlaceNew - новая запись. Кто сегодня не играл, встаёт за всеми такими же (кто раньше записался, тот выше),
+// но перед сыгравшими. Сыгравший встаёт среди сыгравших по времени последнего матча: кто играл давнее, тот выше,
+// поэтому выйти и записаться заново, чтобы обойти очередь, нельзя. Выше вызванных на матч не встаёт никто.
 func qPlaceNew(items []queueItem, it queueItem) []queueItem {
-	if it.Today > 0 {
-		return append(items[:len(items):len(items)], it)
+	from := max(qInflight(items), qFreshEnd(items))
+	if it.Today == 0 {
+		return qInsertAt(items, from, it)
 	}
-	return qInsertAt(items, qFreshEnd(items), it)
+	for i := from; i < len(items); i++ {
+		if items[i].Today > 0 && qPlayedEarlier(it, items[i]) {
+			return qInsertAt(items, i, it)
+		}
+	}
+	return append(items[:len(items):len(items)], it)
+}
+
+// qPlayedEarlier - a стоит выше b среди сыгравших сегодня: его последний матч раньше, при равенстве - раньше записался.
+func qPlayedEarlier(a, b queueItem) bool {
+	if !a.Last.Equal(b.Last) {
+		return a.Last.Before(b.Last)
+	}
+	return a.Joined.Before(b.Joined)
+}
+
+// qPlaceAfterMatch - игрок записи только что сыграл матч в другом месте (другой очереди или вне очереди): запись
+// встаёт среди сыгравших сегодня туда же, куда встала бы, записавшись сейчас. Вызванных на матч не трогает.
+func qPlaceAfterMatch(items []queueItem, it queueItem) []queueItem {
+	rest, old, ok := qWithout(items, it.ID)
+	if !ok || !qEligible(old.Status) {
+		return items
+	}
+	return qPlaceNew(rest, it)
 }
 
 // qPlaceSkipped - пропущенная запись уходит в конец своей группы: не выступавшая - за всеми не выступавшими,
@@ -154,10 +184,10 @@ func qMoveTo(items []queueItem, id string, pos int) []queueItem {
 	return qInsertAt(rest, at, it)
 }
 
-// qNext - первая запись, которую можно вызвать: ждущая или пропущенная.
+// qNext - первая запись, которую можно вызвать: ждущая или пропущенная и без кулдауна у игроков.
 func qNext(items []queueItem) (queueItem, bool) {
 	for _, it := range items {
-		if qEligible(it.Status) {
+		if qEligible(it.Status) && !it.Cooldown {
 			return it, true
 		}
 	}
