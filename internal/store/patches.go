@@ -499,7 +499,10 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 	const scope = `t.season_id = $1 AND t.mode = '1x1' AND t.status IN ('finished', 'live')`
 
 	rows, err := s.Pool.Query(ctx, `
-		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.status, t.format = 'show', t.voided, t.rating_multiplier, t.games,
+		SELECT t.id, COALESCE(t.starts_at, t.created_at), t.status, t.format = 'show', t.voided,
+		       GREATEST(t.rating_multiplier, CASE WHEN EXISTS (
+		           SELECT 1 FROM token_ledger tl WHERE tl.tournament_id = t.id AND tl.kind = 'double') THEN 2 ELSE 1 END),
+		       t.games,
 		       COALESCE(t.winner_participant_id, ''), t.maps
 		FROM tournaments t WHERE `+scope+`
 		ORDER BY 2, t.created_at, t.id`, sn.ID)
