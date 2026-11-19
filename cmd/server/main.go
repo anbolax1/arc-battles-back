@@ -15,6 +15,7 @@ import (
 	"github.com/battle-for-respect/backend/internal/config"
 	"github.com/battle-for-respect/backend/internal/db"
 	"github.com/battle-for-respect/backend/internal/store"
+	"github.com/battle-for-respect/backend/internal/syncer"
 	"github.com/battle-for-respect/backend/internal/ws"
 )
 
@@ -42,8 +43,10 @@ func main() {
 	} else if done {
 		log.Println("MMR пересчитан по правилам сезонов")
 	}
-	if err := st.SyncSeasonWinnerTags(ctx); err != nil {
-		log.Printf("теги чемпионов сезонов: %v", err)
+	if !cfg.AppMode {
+		if err := st.SyncSeasonWinnerTags(ctx); err != nil {
+			log.Printf("теги чемпионов сезонов: %v", err)
+		}
 	}
 	// Нашивки догоняют матчи, изменённые в обход сервера: импорт, новые правила.
 	if _, err := st.SyncPatches(ctx); err != nil {
@@ -69,7 +72,26 @@ func main() {
 	}
 
 	srv := api.New(cfg, st, ws.NewHub())
-	srv.Media.LightenExisting()
+	// Видео сжимает только сайт: приложение забирает готовые файлы, иначе обе стороны пережимали бы их по кругу.
+	if !cfg.AppMode {
+		srv.Media.LightenExisting()
+	}
+
+	// Сайт принимает синхронизацию приложения организатора; рейтинг после неё пересчитывается с паузой,
+	// чтобы поток записей не гонял пересчёт на каждую.
+	if cfg.SyncToken != "" && !cfg.AppMode {
+		srv.SyncHandler = &syncer.Handler{
+			Pool: pool, Token: cfg.SyncToken, MediaDir: cfg.MediaDir,
+			Recompute: &syncer.Recomputer{Run: func() error { return st.RecomputeAllMmr(context.Background()) }},
+			OnApplied: srv.OnSynced,
+		}
+		log.Println("синхронизация с приложением организатора включена")
+	}
+	if cfg.AppMode && cfg.SyncRemoteURL != "" && cfg.SyncToken != "" {
+		srv.Sync = syncer.NewRunner(pool, syncer.Config{
+			RemoteURL: cfg.SyncRemoteURL, Token: cfg.SyncToken, Interval: cfg.SyncInterval, MediaDir: cfg.MediaDir,
+		}, syncer.Hooks{Recompute: st.RecomputeAllMmr, Pulled: srv.OnSynced})
+	}
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr(),
@@ -78,16 +100,21 @@ func main() {
 	}
 
 	// Дата окончания сезона и полночь, когда выпадает пояс, наступают сами по себе: тег чемпиона и новости
-	// о поясе проверяются раз в минуту.
-	srv.SyncBeltNews(ctx)
-	go func() {
-		for range time.Tick(time.Minute) {
-			if err := st.SyncSeasonWinnerTags(ctx); err != nil {
-				log.Printf("теги чемпионов сезонов: %v", err)
+	// о поясе проверяются раз в минуту. В приложении этого нет: теги и новости приезжают с сайта.
+	if !cfg.AppMode {
+		srv.SyncBeltNews(ctx)
+		go func() {
+			for range time.Tick(time.Minute) {
+				if err := st.SyncSeasonWinnerTags(ctx); err != nil {
+					log.Printf("теги чемпионов сезонов: %v", err)
+				}
+				srv.SyncBeltNews(ctx)
 			}
-			srv.SyncBeltNews(ctx)
-		}
-	}()
+		}()
+	}
+	if srv.Sync != nil {
+		srv.Sync.Start(ctx)
+	}
 
 	go func() {
 		log.Printf("API слушает на :%s", cfg.Port)

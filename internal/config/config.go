@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 // Config — все настройки сервиса, читаются из переменных окружения (и из .env при наличии).
@@ -30,6 +31,14 @@ type Config struct {
 	YtDlpPath   string
 	FfmpegPath  string
 	FfprobePath string
+
+	// Приложение организатора на его компьютере (APP_MODE=local): работает без сайта и синхронизируется с ним.
+	AppMode       bool
+	AppToken      string // секрет лаунчера для служебных запросов (статус синхронизации)
+	SyncRemoteURL string // адрес сайта, с которым приложение синхронизируется
+	SyncInterval  time.Duration
+	// На сайте: общий секрет, по которому принимается синхронизация приложения. Пусто - синхронизация выключена.
+	SyncToken string
 }
 
 // devJWTSecret — небезопасный дефолт: допустим только при явном dev-флаге.
@@ -54,7 +63,21 @@ func Load() Config {
 		YtDlpPath:          env("YTDLP_PATH", "yt-dlp"),
 		FfmpegPath:         env("FFMPEG_PATH", "ffmpeg"),
 		FfprobePath:        env("FFPROBE_PATH", "ffprobe"),
+		AppMode:            env("APP_MODE", "") == "local",
+		AppToken:           env("APP_TOKEN", ""),
+		SyncRemoteURL:      strings.TrimRight(env("SYNC_REMOTE_URL", ""), "/"),
+		SyncInterval:       syncInterval(env("SYNC_INTERVAL", "")),
+		SyncToken:          env("SYNC_TOKEN", ""),
 	}
+}
+
+// syncInterval - пауза между проходами синхронизации; по умолчанию полминуты.
+func syncInterval(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 5*time.Second {
+		return 30 * time.Second
+	}
+	return d
 }
 
 // ListenAddr — адрес для http.Server.

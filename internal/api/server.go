@@ -10,6 +10,7 @@ import (
 	"github.com/battle-for-respect/backend/internal/media"
 	"github.com/battle-for-respect/backend/internal/models"
 	"github.com/battle-for-respect/backend/internal/store"
+	"github.com/battle-for-respect/backend/internal/syncer"
 	"github.com/battle-for-respect/backend/internal/ws"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -20,6 +21,10 @@ type Server struct {
 	Store *store.Store
 	Hub   *ws.Hub
 	Media *media.Processor
+
+	// SyncHandler - на сайте: приём синхронизации от приложения; Sync - в приложении: сама синхронизация.
+	SyncHandler http.Handler
+	Sync        *syncer.Runner
 
 	// presetsRev — счётчик правок пресетов оверлея. Едет в конверте состояния по WS;
 	// оверлеи, привязанные к пресету ссылкой, по его смене перечитывают раскладку.
@@ -64,6 +69,19 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.injectUser)
 
 		r.Get("/health", s.handleHealth)
+
+		// Синхронизация приложения организатора: сайт принимает запросы приложения по общему секрету,
+		// а приложение отдаёт лаунчеру состояние своей синхронизации.
+		if s.SyncHandler != nil {
+			r.Mount("/sync", http.StripPrefix("/api/sync", s.SyncHandler))
+		}
+		if s.Sync != nil {
+			r.Route("/app", func(r chi.Router) {
+				r.Use(s.appAccess)
+				r.Get("/sync", s.handleAppSyncStatus)
+				r.Post("/sync/run", s.handleAppSyncRun)
+			})
+		}
 
 		// --- Auth (логин/пароль) ---
 		r.Post("/auth/register", s.handleSignup)
