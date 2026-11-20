@@ -1180,3 +1180,28 @@ type RoundPenalty struct {
 	ValueType      string `json:"valueType"`
 	Times          int    `json:"times"`
 }
+
+// IdlePlayer - игрок, давно не игравший матчей: сайт заносит его ник снегом.
+type IdlePlayer struct {
+	Login string `json:"login"`
+	Days  int    `json:"days"` // полных дней с последнего завершённого матча
+}
+
+// SnowballThrower - кто бросил снежок в профиль.
+type SnowballThrower struct {
+	Login       string `json:"login"`
+	DisplayName string `json:"displayName"`
+}
+
+// SnowballMe - что видит о снежках вошедший игрок: можно ли бросить сейчас.
+type SnowballMe struct {
+	Self    bool `json:"self"`    // профиль его собственный
+	WaitSec int  `json:"waitSec"` // сколько секунд до следующего броска; 0 - можно сейчас
+}
+
+// SnowballSummary - снежки в профиле с последнего матча игрока.
+type SnowballSummary struct {
+	Count  int               `json:"count"`
+	Recent []SnowballThrower `json:"recent"`
+	Me     *SnowballMe       `json:"me,omitempty"`
+}

@@ -120,3 +120,17 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 		"legendary":     legendary,     // легендарные контракты
 	})
 }
+
+// Порог «давно не играл» для снега на никах: с недели без матчей.
+const idleMinDays = 7
+
+// handleIdlePlayers - кто давно не играл: сайт рисует у их ников снег. Список общий для всех, кэшируется.
+func (s *Server) handleIdlePlayers(w http.ResponseWriter, r *http.Request) {
+	players, err := s.Store.IdlePlayers(r.Context(), idleMinDays)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	writeJSON(w, http.StatusOK, players)
+}
