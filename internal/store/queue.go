@@ -275,7 +275,7 @@ func fillQueueMembers(ctx context.Context, db queryer, members []*models.QueueMe
 
 // queueMmrs - MMR записей в текущем сезоне: игрока для 1×1, команды для 2×2. Не игравшие - со старта сезона.
 func (s *Store) queueMmrs(ctx context.Context, db queryer, format string, entries []models.QueueEntry) (map[string]int, error) {
-	rule := s.activeSeasonRule(ctx)
+	rule := activeSeasonRuleOf(ctx, db)
 	byKey := map[string]int{} // user id или ключ команды -> сумма изменений
 	keys := make([]string, 0, len(entries))
 	for _, e := range entries {

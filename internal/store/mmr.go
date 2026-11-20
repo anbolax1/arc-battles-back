@@ -35,8 +35,14 @@ func (s *Store) tournamentSeasonRule(ctx context.Context, tournamentID string) (
 
 // activeSeasonRule - правила текущего сезона; без активного сезона - правила «вне сезона».
 func (s *Store) activeSeasonRule(ctx context.Context) seasonRule {
+	return activeSeasonRuleOf(ctx, s.Pool)
+}
+
+// activeSeasonRuleOf читает правило сезона тем же соединением, что и вызывающий: внутри транзакции второе
+// соединение из пула при нагрузке намертво занимает весь пул.
+func activeSeasonRuleOf(ctx context.Context, db queryer) seasonRule {
 	r := seasonRule{Key: "", K: legacyK, Start: StartMmr}
-	_ = s.Pool.QueryRow(ctx, `SELECT id, k_factor, start_mmr FROM seasons WHERE status = 'active' LIMIT 1`).
+	_ = db.QueryRow(ctx, `SELECT id, k_factor, start_mmr FROM seasons WHERE status = 'active' LIMIT 1`).
 		Scan(&r.Key, &r.K, &r.Start)
 	return r
 }

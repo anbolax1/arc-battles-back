@@ -1254,3 +1254,32 @@ func TestQueuePriorityTokenPromotes(t *testing.T) {
 		t.Errorf("событие b: %+v", prio[0])
 	}
 }
+
+// Много страниц очереди сразу не занимают весь пул подключений: снимок очереди внутри своей транзакции
+// не берёт второго соединения, иначе при числе запросов больше размера пула всё встаёт намертво.
+func TestQueueSnapshotsDoNotExhaustPool(t *testing.T) {
+	e := newQueueEnv(t)
+	sid := e.session("1x1")
+	e.join(sid, e.user("a"))
+
+	const viewers = 60 // заметно больше размера пула (10)
+	ctx, cancel := context.WithTimeout(e.ctx, 20*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	errs := make(chan error, viewers)
+	for i := 0; i < viewers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := e.st.QueueSnapshotFor(ctx, sid, "")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("снимок очереди при нагрузке: %v", err)
+		}
+	}
+}
