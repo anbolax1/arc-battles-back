@@ -1183,8 +1183,9 @@ type RoundPenalty struct {
 
 // IdlePlayer - игрок, давно не игравший матчей: сайт заносит его ник снегом.
 type IdlePlayer struct {
-	Login string `json:"login"`
-	Days  int    `json:"days"` // полных дней с последнего завершённого матча
+	Login       string `json:"login"`
+	DisplayName string `json:"displayName"` // под этим именем игрок виден на сайте простым текстом
+	Days        int    `json:"days"`        // полных дней с последнего завершённого матча
 }
 
 // SnowballThrower - кто бросил снежок в профиль.

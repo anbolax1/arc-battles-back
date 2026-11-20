@@ -22,10 +22,10 @@ func (s *Store) IdlePlayers(ctx context.Context, minDays int) ([]models.IdlePlay
 		      CROSS JOIN LATERAL jsonb_array_elements(
 		          CASE WHEN jsonb_typeof(p.members) = 'array' THEN p.members ELSE '[]'::jsonb END) m
 		)
-		SELECT u.login, FLOOR(EXTRACT(EPOCH FROM now() - MAX(played.at)) / 86400)::int AS days
+		SELECT u.login, u.display_name, FLOOR(EXTRACT(EPOCH FROM now() - MAX(played.at)) / 86400)::int AS days
 		  FROM played
 		  JOIN users u ON u.id = played.uid
-		 GROUP BY u.login
+		 GROUP BY u.login, u.display_name
 		HAVING MAX(played.at) <= now() - make_interval(days => $1)
 		 ORDER BY days DESC`
 	rows, err := s.Pool.Query(ctx, q, minDays)
@@ -37,7 +37,7 @@ func (s *Store) IdlePlayers(ctx context.Context, minDays int) ([]models.IdlePlay
 	out := []models.IdlePlayer{}
 	for rows.Next() {
 		var p models.IdlePlayer
-		if err := rows.Scan(&p.Login, &p.Days); err != nil {
+		if err := rows.Scan(&p.Login, &p.DisplayName, &p.Days); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
