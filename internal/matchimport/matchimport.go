@@ -215,7 +215,8 @@ func (im *Importer) Upsert(ctx context.Context, m Match, seasonID string) error 
 				done = &pids[t.Side]
 			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO round_bonus_tasks (round_id, participant_id, task_id, completed_by) VALUES ($1, $2, $3, $4)
+				INSERT INTO round_bonus_tasks (round_id, participant_id, task_id, points, completed_by)
+				SELECT $1, $2, ct.id, ct.points, $4 FROM catalog_tasks ct WHERE ct.id = $3
 				ON CONFLICT (round_id, participant_id, task_id) DO NOTHING`, rid, pids[t.Side], taskID, done); err != nil {
 				return err
 			}

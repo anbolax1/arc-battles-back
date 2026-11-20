@@ -697,7 +697,7 @@ func (s *Store) loadPatchInput(ctx context.Context, sn models.Season, prev *mode
 			JOIN starter_tasks st ON st.id = rst.starter_task_id
 			WHERE rst.round_id = r.id
 			UNION ALL
-			SELECT rbt.completed_by, CASE WHEN rbt.completed_by = rbt.participant_id THEN ct.points ELSE $2::int END
+			SELECT rbt.completed_by, CASE WHEN rbt.completed_by = rbt.participant_id THEN rbt.points ELSE $2::int END
 			FROM round_bonus_tasks rbt JOIN catalog_tasks ct ON ct.id = rbt.task_id
 			WHERE rbt.round_id = r.id AND rbt.completed_by IS NOT NULL
 			UNION ALL

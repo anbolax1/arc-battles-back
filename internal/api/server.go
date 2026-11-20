@@ -275,6 +275,9 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/overlay/presets/{id}", s.handleDeleteOverlayPreset)
 
 			// Справочник заданий и усложнений (редактирование организатором)
+			// Общие правила раздачи заданий: задание на время, очки и число обычных заданий на раунд.
+			r.Get("/task-settings", s.handleGetTaskSettings)
+			r.Put("/task-settings", s.handleSetTaskSettings)
 			r.Post("/catalog/tasks", s.handleCreateTask)
 			r.Post("/catalog/tasks/bulk", s.handleBulkCreateTasks)
 			r.Patch("/catalog/tasks/{id}", s.handleUpdateTask)

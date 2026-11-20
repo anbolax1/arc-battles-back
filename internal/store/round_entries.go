@@ -106,7 +106,7 @@ func (s *Store) participantBreakdown(ctx context.Context, participantID string) 
 	// Задания: своё выполненное - очки из каталога, выполненное задание противника - 1.
 	// Приведение $2::int обязательно: без него Postgres считает параметр текстом и SUM падает.
 	if err := s.Pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(CASE WHEN rbt.participant_id = $1 THEN ct.points ELSE $2::int END), 0)
+		SELECT COALESCE(SUM(CASE WHEN rbt.participant_id = $1 THEN rbt.points ELSE $2::int END), 0)
 		FROM round_bonus_tasks rbt
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		WHERE rbt.completed_by = $1`, participantID, ContractCrossPoints).Scan(&b.Contracts); err != nil {

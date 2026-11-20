@@ -10,7 +10,7 @@ import (
 
 // Контракты (бывш. бонусные задания). Владелец контракта = participant_id (кому выдан).
 // completed_by — кто фактически выполнил: владелец → +2 балла, противник → +1 балл, NULL → не выполнен.
-const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, ct.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
+const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, rbt.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
 	rbt.completed_user_id, ct.name, ct.tag, ct.rarity, ` + dealtTaskMap
 
 // dealtTaskMap - карта выданного задания: у задания на картах это карта раунда, у общего - пусто.
@@ -76,8 +76,9 @@ func (s *Store) AssignBonusTask(ctx context.Context, roundID, participantID, tas
 		return models.RoundBonusTask{}, ErrConflict
 	}
 	if _, err := s.Pool.Exec(ctx, `
-		INSERT INTO round_bonus_tasks (round_id, participant_id, task_id)
-		VALUES ($1, $2, $3) ON CONFLICT (round_id, participant_id, task_id) DO NOTHING`,
+		INSERT INTO round_bonus_tasks (round_id, participant_id, task_id, points)
+		SELECT $1, $2, ct.id, array_position(`+raritySQL+`, ct.rarity) FROM catalog_tasks ct WHERE ct.id = $3
+		ON CONFLICT (round_id, participant_id, task_id) DO NOTHING`,
 		roundID, participantID, taskID); err != nil {
 		return models.RoundBonusTask{}, err
 	}

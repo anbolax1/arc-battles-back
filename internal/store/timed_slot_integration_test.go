@@ -13,7 +13,7 @@ import (
 	"github.com/battle-for-respect/backend/internal/store"
 )
 
-// У каждой стороны в раунде три задания, из них ровно одно на время; заданий на карту нет (отключены);
+// У каждой стороны в раунде ровно одно задание на время и обычные на 5 очков; заданий на карту нет (отключены);
 // задание на время чужой карты не выпадает; задание на время засчитывается только владельцу. Запуск - как у TestMMRIntegration.
 func TestTimedSlotIntegration(t *testing.T) {
 	url := os.Getenv("RESPECT_TEST_DB")
@@ -109,15 +109,15 @@ func TestTimedSlotIntegration(t *testing.T) {
 			if d.Tag == models.TaskTagTimed {
 				timed[d.ParticipantID]++
 			} else {
-				normal[d.ParticipantID]++
+				normal[d.ParticipantID] += d.Points
 			}
 		}
 		if len(timed) != 2 {
 			t.Fatalf("раздача %d: задание на время есть не у всех сторон: %v", i, timed)
 		}
 		for pid, n := range timed {
-			if n != 1 || normal[pid] != 2 {
-				t.Fatalf("раздача %d, сторона %s: на время %d, обычных %d (ждали 1 и 2)", i, pid, n, normal[pid])
+			if n != 1 || normal[pid] != models.RoundTaskBudget {
+				t.Fatalf("раздача %d, сторона %s: на время %d, очков обычных %d (ждали 1 и %d)", i, pid, n, normal[pid], models.RoundTaskBudget)
 			}
 		}
 		lastTour, lastRound = tour.ID, rd.ID

@@ -142,8 +142,8 @@ func TestTeamMemberScores(t *testing.T) {
 	// Задание команды засчитывается одному игроку: второму - только после отмены.
 	var task string
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO round_bonus_tasks (round_id, participant_id, task_id)
-		SELECT $1, $2, id FROM catalog_tasks ORDER BY id LIMIT 1 RETURNING id`, round, side).Scan(&task); err != nil {
+		INSERT INTO round_bonus_tasks (round_id, participant_id, task_id, points)
+		SELECT $1, $2, id, points FROM catalog_tasks ORDER BY id LIMIT 1 RETURNING id`, round, side).Scan(&task); err != nil {
 		t.Logf("каталог заданий пуст - зачёт задания не проверен: %v", err)
 		return
 	}

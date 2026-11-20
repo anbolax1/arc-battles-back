@@ -26,8 +26,8 @@ func TestNormalizeTaskRarities(t *testing.T) {
 	}
 }
 
-// Раздача по предпочтениям игрока: из профиля, ручная настройка стороны перекрывает профиль, а если задач
-// нужной редкости нет - берутся ближайшие. Запуск - как у TestMMRIntegration.
+// Раздача по предпочтениям игрока: из профиля, ручная настройка стороны перекрывает профиль; обычные задания
+// каждой стороны складываются ровно в 5 очков. Запуск - как у TestMMRIntegration.
 func TestTaskRarityPrefsIntegration(t *testing.T) {
 	url := os.Getenv("RESPECT_TEST_DB")
 	if url == "" {
@@ -85,7 +85,7 @@ func TestTaskRarityPrefsIntegration(t *testing.T) {
 		}
 		return u
 	}
-	deal := func(a, b store.MatchSide) map[string][]string {
+	deal := func(a, b store.MatchSide) map[string][]models.RoundBonusTask {
 		t.Helper()
 		starts := time.Now().Add(24 * time.Hour)
 		tour, err := st.CreateMatch(ctx, store.NewMatch{
@@ -113,46 +113,62 @@ func TestTaskRarityPrefsIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out := map[string][]string{}
+		out := map[string][]models.RoundBonusTask{}
 		for _, d := range dealt {
-			out[userOf[d.ParticipantID]] = append(out[userOf[d.ParticipantID]], d.Rarity)
+			out[userOf[d.ParticipantID]] = append(out[userOf[d.ParticipantID]], d)
 		}
 		return out
 	}
-	only := func(rs []string, want ...string) bool {
-		return len(rs) == 3 && !slices.ContainsFunc(rs, func(r string) bool { return !slices.Contains(want, r) })
+	// normals - обычные задания (без задания на время): их очки всегда складываются ровно в 5.
+	normals := func(list []models.RoundBonusTask) (rarities []string) {
+		sum := 0
+		for _, d := range list {
+			if d.Tag == models.TaskTagTimed {
+				continue
+			}
+			if d.Points != models.RarityPoints(d.Rarity) {
+				t.Errorf("очки %d у %s, ждали по редкости", d.Points, d.Rarity)
+			}
+			sum += d.Points
+			rarities = append(rarities, d.Rarity)
+		}
+		if sum != models.RoundTaskBudget {
+			t.Errorf("очки обычных заданий %d (%v), ждали %d", sum, rarities, models.RoundTaskBudget)
+		}
+		return rarities
 	}
 
-	// 1. Предпочтения из профиля: у A только легендарные; задание на время - тоже легендарное.
+	// 1. Предпочтения из профиля: у A только легендарные - одно легендарное на 5 очков.
 	a := player("a", []string{models.RarityLegendary})
 	b := player("b", nil)
 	got := deal(store.MatchSide{UserID: a.ID}, store.MatchSide{UserID: b.ID})
-	if !only(got[a.ID], models.RarityLegendary) {
-		t.Errorf("профиль {legendary}: выдано %v", got[a.ID])
+	if r := normals(got[a.ID]); fmt.Sprint(r) != "[legendary]" {
+		t.Errorf("профиль {legendary}: выдано %v", r)
 	}
 
-	// 2. Ручная настройка стороны перекрывает профиль: профиль A - легендарные, на матч - редкие.
+	// 2. Ручная настройка стороны перекрывает профиль: профиль C - легендарные, на матч - редкие.
+	// Редкое (3 очка) добирается обычными (2 очка).
 	c := player("c", []string{models.RarityLegendary})
 	d := player("d", nil)
 	got = deal(store.MatchSide{UserID: c.ID, TaskRarities: []string{models.RarityRare}}, store.MatchSide{UserID: d.ID})
-	if !only(got[c.ID], models.RarityRare) {
-		t.Errorf("ручная настройка {rare} поверх профиля {legendary}: выдано %v", got[c.ID])
+	r := normals(got[c.ID])
+	slices.Sort(r)
+	if fmt.Sprint(r) != "[common common rare]" {
+		t.Errorf("ручная настройка {rare} поверх профиля {legendary}: выдано %v", r)
 	}
 
-	// 3. Редкости, которой нет, добираются ближайшими: epic -> rare или legendary (обе на расстоянии 1).
+	// 3. Желаемых редкостей в пуле нет (эпических): набор всё равно ровно на 5 очков.
 	e := player("e", []string{models.RarityEpic})
 	f := player("f", nil)
 	got = deal(store.MatchSide{UserID: e.ID}, store.MatchSide{UserID: f.ID})
-	if !only(got[e.ID], models.RarityEpic, models.RarityRare, models.RarityLegendary) {
-		t.Errorf("профиль {epic} без эпических: выдано %v (ждали ближайшие rare/legendary)", got[e.ID])
-	}
+	normals(got[e.ID])
 
-	// 4. По умолчанию у игрока только обычные: в профиле одна редкость, и выдаются три задания.
+	// 4. По умолчанию у игрока только обычные: в профиле одна редкость, и выдаются пять обычных.
 	if def, err := st.GetUserTaskRarities(ctx, f.ID); err != nil || fmt.Sprint(def) != "[common]" {
 		t.Errorf("умолчание профиля: %v %v", def, err)
 	}
-	if len(got[f.ID]) != 3 {
-		t.Errorf("по умолчанию выдано %v", got[f.ID])
+	if r := normals(got[f.ID]); fmt.Sprint(r) != "[common common common common common]" {
+		t.Errorf("по умолчанию выдано %v", r)
 	}
 
 	// 5. Профиль хранится в каноническом виде.

@@ -219,7 +219,7 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 
 	// Задания: своё выполненное - очки из каталога, выполненное соперником - балл ему.
 	rows, err = s.Pool.Query(ctx, `
-		SELECT b.round_id, b.participant_id, COALESCE(b.completed_by, ''), ct.tag = 'timed', cardinality(ct.map_codes) > 0, ct.points
+		SELECT b.round_id, b.participant_id, COALESCE(b.completed_by, ''), ct.tag = 'timed', cardinality(ct.map_codes) > 0, b.points
 		FROM round_bonus_tasks b JOIN rounds r ON r.id = b.round_id JOIN tournaments t ON t.id = r.tournament_id
 		JOIN catalog_tasks ct ON ct.id = b.task_id
 		WHERE `+scope+`

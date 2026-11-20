@@ -173,7 +173,7 @@ func (s *Store) loadRecap(ctx context.Context, sn models.Season) (recapInput, er
 
 	// Задания: своё выполненное - очки из каталога, выполненное соперником - балл ему.
 	rows, err = s.Pool.Query(ctx, `
-		SELECT b.round_id, b.participant_id, COALESCE(b.completed_by, ''), ct.name, ct.text, ct.tag = 'timed', ct.points,
+		SELECT b.round_id, b.participant_id, COALESCE(b.completed_by, ''), ct.name, ct.text, ct.tag = 'timed', b.points,
 		       `+dealtTaskMap+`
 		FROM round_bonus_tasks b JOIN rounds r ON r.id = b.round_id JOIN tournaments t ON t.id = r.tournament_id
 		JOIN catalog_tasks ct ON ct.id = b.task_id

@@ -864,6 +864,19 @@ const (
 	RarityLegendary = "legendary"
 )
 
+// RoundTaskBudget - сколько очков редкостей набирают задания стороны в раунде (без задания на время).
+const RoundTaskBudget = 5
+
+// RarityPoints - очки задания: обычное 1, необычное 2, редкое 3, эпическое 4, легендарное 5.
+func RarityPoints(rarity string) int {
+	for i, r := range TaskRarities {
+		if r == rarity {
+			return i + 1
+		}
+	}
+	return 1
+}
+
 // Тип раунда: бесплатный - выдаётся бесплатное снаряжение, платный - свой билд.
 const (
 	RoundTypeAny  = "any"
