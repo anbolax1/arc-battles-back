@@ -51,9 +51,9 @@ func (r *Recomputer) Touch() {
 
 // Handler - сторона сайта: принимает запросы приложения. Доступ по общему секрету в заголовке X-Sync-Token.
 type Handler struct {
-	Pool      *pgxpool.Pool
-	Token     string
-	MediaDir  string
+	Pool     *pgxpool.Pool
+	Token    string
+	MediaDir string
 	// UpdateDir - папка с установщиком приложения и latest.json: приложение забирает оттуда обновления.
 	UpdateDir string
 	Recompute *Recomputer
