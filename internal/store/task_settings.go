@@ -92,7 +92,6 @@ func (s *Store) SaveTaskDealSettings(ctx context.Context, c TaskDealSettings) er
 	return nil
 }
 
-
 // chooseTaskSet собирает набор обычных заданий: не больше maxTasks штук на budget очков (очки = редкость).
 // Сначала набор только из желаемых редкостей (ranks), потом с обычными заданиями для добора, потом из любых
 // редкостей; все наборы, на которые хватает заданий в пуле, равновероятны. Если точно на budget не собрать,
