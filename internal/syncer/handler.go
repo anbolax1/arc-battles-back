@@ -54,6 +54,8 @@ type Handler struct {
 	Pool      *pgxpool.Pool
 	Token     string
 	MediaDir  string
+	// UpdateDir - папка с установщиком приложения и latest.json: приложение забирает оттуда обновления.
+	UpdateDir string
 	Recompute *Recomputer
 	// OnApplied зовётся после записи в таблицы приложения организатора (например, сбросить кэши).
 	OnApplied func(touched map[string]bool)
@@ -114,6 +116,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.schema(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/logins":
 		h.logins(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/update":
+		h.update(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/update/file":
+		h.updateFile(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/media":
 		h.mediaList(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/media/file":

@@ -30,6 +30,17 @@ func (s *Server) handleAppSyncRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"queued": true})
 }
 
+// GET /api/app/busy - идёт ли матч: пока он идёт, лаунчер не перезапускает приложение для обновления.
+func (s *Server) handleAppBusy(w http.ResponseWriter, r *http.Request) {
+	var live bool
+	err := s.Store.Pool.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM tournaments WHERE status = 'live')`).Scan(&live)
+	if err != nil {
+		// Не знаем наверняка - считаем, что занято: обновление подождёт.
+		live = true
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"live": live})
+}
+
 // OnSynced сообщает серверу, что с сайта приехали строки: пресеты оверлея перечитываются.
 func (s *Server) OnSynced(touched map[string]bool) {
 	if touched["overlay_presets"] {

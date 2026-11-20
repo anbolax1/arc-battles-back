@@ -39,6 +39,8 @@ type Config struct {
 	SyncInterval  time.Duration
 	// На сайте: общий секрет, по которому принимается синхронизация приложения. Пусто - синхронизация выключена.
 	SyncToken string
+	// SyncUpdateDir - на сайте: папка с установщиком приложения организатора (GOARC-Setup-*.exe и latest.json).
+	SyncUpdateDir string
 }
 
 // devJWTSecret — небезопасный дефолт: допустим только при явном dev-флаге.
@@ -68,6 +70,7 @@ func Load() Config {
 		SyncRemoteURL:      strings.TrimRight(env("SYNC_REMOTE_URL", ""), "/"),
 		SyncInterval:       syncInterval(env("SYNC_INTERVAL", "")),
 		SyncToken:          env("SYNC_TOKEN", ""),
+		SyncUpdateDir:      env("SYNC_UPDATE_DIR", "./updates"),
 	}
 }
 

@@ -81,7 +81,7 @@ func main() {
 	// чтобы поток записей не гонял пересчёт на каждую.
 	if cfg.SyncToken != "" && !cfg.AppMode {
 		srv.SyncHandler = &syncer.Handler{
-			Pool: pool, Token: cfg.SyncToken, MediaDir: cfg.MediaDir,
+			Pool: pool, Token: cfg.SyncToken, MediaDir: cfg.MediaDir, UpdateDir: cfg.SyncUpdateDir,
 			Recompute: &syncer.Recomputer{Run: func() error { return st.RecomputeAllMmr(context.Background()) }},
 			OnApplied: srv.OnSynced,
 		}
