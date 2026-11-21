@@ -94,12 +94,8 @@ func TestTimedSlotIntegration(t *testing.T) {
 		if err := st.DealRoundTasks(ctx, rd.ID); err != nil {
 			t.Fatal(err)
 		}
-		dealt, err := st.ListTournamentBonusTasks(ctx, tour.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
 		timed, normal := map[string]int{}, map[string]int{}
-		for _, d := range dealt {
+		for _, d := range playOutTaskQueue(ctx, t, pool, st, tour.ID) {
 			if d.MapCode != "" {
 				t.Fatalf("выдано задание на карту %s, а они отключены", d.MapCode)
 			}
@@ -148,6 +144,10 @@ func TestTimedSlotIntegration(t *testing.T) {
 	}
 
 	// Чужой игрок задание на время не засчитывает, владелец - да; обычное чужой засчитывает.
+	// Обычное задание после прохода очереди выполнено - снимаем зачёт.
+	if _, err := st.MarkTask(ctx, normalAssign.ID, "none", ""); err != nil {
+		t.Fatalf("снятие зачёта: %v", err)
+	}
 	if _, err := st.MarkTask(ctx, timedAssign.ID, "opponent", ""); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("соперник отметил задание на время: %v", err)
 	}

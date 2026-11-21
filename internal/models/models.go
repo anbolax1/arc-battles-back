@@ -1133,6 +1133,8 @@ type RoundBonusTask struct {
 	Tag           string  `json:"tag"`               // normal | timed - задание на время
 	Rarity        string  `json:"rarity"`            // common | uncommon | rare | epic | legendary
 	MapCode       string  `json:"mapCode,omitempty"` // задание на карту раунда
+	// Место в очереди обычных заданий стороны; пусто у задания на время, ручных и старых выдач.
+	QueuePos *int `json:"-"`
 }
 
 // CatalogLegendary — легендарный контракт (глобальный пул, 10 баллов, выполним один раз навсегда).

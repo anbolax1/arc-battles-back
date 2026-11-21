@@ -223,7 +223,13 @@ func (s *Store) loadChanceHistory(ctx context.Context) ([]chanceMatchRec, error)
 		FROM round_bonus_tasks b JOIN rounds r ON r.id = b.round_id JOIN tournaments t ON t.id = r.tournament_id
 		JOIN catalog_tasks ct ON ct.id = b.task_id
 		WHERE `+scope+`
-		ORDER BY b.created_at, b.id`)
+		UNION ALL
+		-- Задания, до которых очередь не дошла, считаются невыполненными: как у стороны, которой выдали всё сразу.
+		SELECT q.round_id, q.participant_id, '', false, cardinality(ct.map_codes) > 0, 0
+		FROM round_task_queue q JOIN rounds r ON r.id = q.round_id JOIN tournaments t ON t.id = r.tournament_id
+		JOIN catalog_tasks ct ON ct.id = q.task_id
+		WHERE `+scope+`
+		ORDER BY 1, 2`)
 	if err != nil {
 		return nil, err
 	}

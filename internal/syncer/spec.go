@@ -60,6 +60,7 @@ var Tables = []Table{
 	{Name: "round_starter_tasks", Winner: SideSite},
 	{Name: "round_starter_task_done", Winner: SideSite},
 	{Name: "round_bonus_tasks", Winner: SideSite},
+	{Name: "round_task_queue", Winner: SideSite},
 	{Name: "legendary_contract_completions", Winner: SideSite},
 	{Name: "match_log", Winner: SideSite},
 	{Name: "match_veto", Winner: SideSite},

@@ -11,7 +11,7 @@ import (
 // Контракты (бывш. бонусные задания). Владелец контракта = participant_id (кому выдан).
 // completed_by — кто фактически выполнил: владелец → +2 балла, противник → +1 балл, NULL → не выполнен.
 const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, rbt.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
-	rbt.completed_user_id, ct.name, ct.tag, ct.rarity, ` + dealtTaskMap
+	rbt.completed_user_id, ct.name, ct.tag, ct.rarity, ` + dealtTaskMap + `, rbt.queue_pos`
 
 // dealtTaskMap - карта выданного задания: у задания на картах это карта раунда, у общего - пусто.
 const dealtTaskMap = `CASE WHEN cardinality(ct.map_codes) > 0 THEN COALESCE(r.map_code, '') ELSE '' END`
@@ -20,7 +20,7 @@ func scanRoundBonusTask(row pgx.Row) (models.RoundBonusTask, error) {
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode)
+		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &t.QueuePos)
 	return t, err
 }
 
@@ -68,6 +68,11 @@ func (s *Store) AssignBonusTask(ctx context.Context, roundID, participantID, tas
 			SELECT 1 FROM round_bonus_tasks rbt
 			JOIN rounds r ON r.id = rbt.round_id
 			WHERE rbt.task_id = $1
+			  AND r.tournament_id = (SELECT tournament_id FROM rounds WHERE id = $2)
+		) OR EXISTS(
+			SELECT 1 FROM round_task_queue q
+			JOIN rounds r ON r.id = q.round_id
+			WHERE q.task_id = $1
 			  AND r.tournament_id = (SELECT tournament_id FROM rounds WHERE id = $2)
 		)`, taskID, roundID).Scan(&dup); err != nil {
 		return models.RoundBonusTask{}, err
@@ -229,23 +234,41 @@ func (s *Store) MarkTask(ctx context.Context, id, by, userID string) (MarkResult
 }
 
 // SetTaskCompletedBy ставит исполнителя задания напрямую (для отмены из журнала); user - игрок команды 2×2.
+// Выполнено задание из очереди - сторона получает следующее; снят зачёт - лишнее открытое уходит обратно в очередь.
 func (s *Store) SetTaskCompletedBy(ctx context.Context, id string, by, user *string) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE round_bonus_tasks SET completed_by = $2, completed_user_id = $3 WHERE id = $1`, id, by, user)
-	return err
+	var roundID, ownerID string
+	var queuePos *int
+	err := s.Pool.QueryRow(ctx, `
+		UPDATE round_bonus_tasks SET completed_by = $2, completed_user_id = $3 WHERE id = $1
+		RETURNING round_id, participant_id, queue_pos`, id, by, user).Scan(&roundID, &ownerID, &queuePos)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil || queuePos == nil {
+		return err
+	}
+	return s.syncTaskQueue(ctx, roundID, ownerID)
 }
 
 // RemoveBonusTask снимает контракт. Возвращает участников для пересчёта (владелец + исполнитель).
 func (s *Store) RemoveBonusTask(ctx context.Context, id string) ([]string, error) {
-	var owner string
+	var roundID, owner string
 	var completedBy *string
+	var queuePos *int
 	err := s.Pool.QueryRow(ctx,
-		`DELETE FROM round_bonus_tasks WHERE id = $1 RETURNING participant_id, completed_by`, id).
-		Scan(&owner, &completedBy)
+		`DELETE FROM round_bonus_tasks WHERE id = $1 RETURNING round_id, participant_id, completed_by, queue_pos`, id).
+		Scan(&roundID, &owner, &completedBy, &queuePos)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if queuePos != nil {
+		// Убрали открытое задание - открывается следующее из очереди.
+		if err := s.syncTaskQueue(ctx, roundID, owner); err != nil {
+			return nil, err
+		}
 	}
 	set := map[string]bool{owner: true}
 	if completedBy != nil {
@@ -270,7 +293,7 @@ func (s *Store) GetBonusAssignment(ctx context.Context, id string) (models.Round
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &tournamentID)
+		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &t.QueuePos, &tournamentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, "", ErrNotFound
 	}

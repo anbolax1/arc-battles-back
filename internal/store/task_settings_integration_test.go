@@ -117,8 +117,8 @@ func TestTaskDealSettingsIntegration(t *testing.T) {
 	if got, err := st.TaskDealSettings(ctx); err != nil || got != (store.TaskDealSettings{TimedEnabled: true, MaxPoints: 7, MaxTasks: 2}) {
 		t.Fatalf("прочитали %+v %v", got, err)
 	}
-	dealt, _ := deal()
-	for pid, s := range sums(dealt) {
+	dealt, tourID := deal()
+	for pid, s := range sums(playOutTaskQueue(ctx, t, pool, st, tourID)) {
 		// Обычные по умолчанию - только обычные редкости: на 7 очков из двух заданий их не собрать,
 		// поэтому набор добирается из любых редкостей.
 		if s.points != 7 || s.count != 2 || s.timed != 1 {
@@ -130,14 +130,15 @@ func TestTaskDealSettingsIntegration(t *testing.T) {
 	if err := st.SaveTaskDealSettings(ctx, store.TaskDealSettings{TimedEnabled: false, MaxPoints: 5, MaxTasks: 5}); err != nil {
 		t.Fatal(err)
 	}
-	dealt, tourID := deal()
-	for pid, s := range sums(dealt) {
+	dealt, tourID = deal()
+	for pid, s := range sums(playOutTaskQueue(ctx, t, pool, st, tourID)) {
 		if s.timed != 0 || s.points != 5 {
 			t.Errorf("сторона %s без заданий на время: %+v", pid, *s)
 		}
 	}
 
 	// Замена обычного задания берёт ту же редкость, очки сохраняются.
+	dealt, tourID = deal()
 	var target models.RoundBonusTask
 	for _, d := range dealt {
 		if d.Tag != models.TaskTagTimed {

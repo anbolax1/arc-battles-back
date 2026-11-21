@@ -109,12 +109,8 @@ func TestTaskRarityPrefsIntegration(t *testing.T) {
 				userOf[p.ID] = *p.UserID
 			}
 		}
-		dealt, err := st.ListTournamentBonusTasks(ctx, tour.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
 		out := map[string][]models.RoundBonusTask{}
-		for _, d := range dealt {
+		for _, d := range playOutTaskQueue(ctx, t, pool, st, tour.ID) {
 			out[userOf[d.ParticipantID]] = append(out[userOf[d.ParticipantID]], d)
 		}
 		return out

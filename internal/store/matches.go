@@ -366,7 +366,8 @@ type taskSlot struct {
 }
 
 // DealRoundTasks выдаёт каждой стороне на раунд задание на время (если оно включено) и набор обычных заданий
-// на заданное число очков (очки задания = его редкость); повторов в матче нет.
+// на заданное число очков (очки задания = его редкость); повторов в матче нет. Обычные задания открываются
+// по одному: следующее - после выполнения текущего.
 func (s *Store) DealRoundTasks(ctx context.Context, roundID string) error {
 	var tournamentID, mapCode string
 	if err := s.Pool.QueryRow(ctx, `
@@ -413,13 +414,14 @@ func (s *Store) dealSideTasks(ctx context.Context, roundID, participantID, mapCo
 		// Нет задания на время - сторона играет без него, на набор обычных это не влияет.
 		id, rarity, err := s.pickTask(ctx, roundID, taskSlot{true, general}, mapCode, "", "", ranks)
 		if err == nil {
-			err = s.insertDealtTask(ctx, roundID, participantID, id, rarity)
+			err = s.insertDealtTask(ctx, roundID, participantID, id, rarity, nil)
 		}
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return err
 		}
 	}
 	budget, maxTasks := cfg.MaxPoints, cfg.MaxTasks
+	var plan []poolTask // обычные задания стороны на раунд: выдаются по одному, от дешёвых к дорогим
 	if mapTasksEnabled {
 		// Одно задание на карту раунда берётся из тех же лимитов.
 		id, rarity, err := s.pickTask(ctx, roundID, taskSlot{false, mapOnMap}, mapCode, "", "", ranks)
@@ -427,34 +429,28 @@ func (s *Store) dealSideTasks(ctx context.Context, roundID, participantID, mapCo
 			return err
 		}
 		if err == nil && models.RarityPoints(rarity) <= budget {
-			if err := s.insertDealtTask(ctx, roundID, participantID, id, rarity); err != nil {
-				return err
-			}
+			plan = append(plan, poolTask{ID: id, Rarity: rarity})
 			budget -= models.RarityPoints(rarity)
 			maxTasks--
 		}
 	}
-	if budget == 0 || maxTasks == 0 {
-		return nil
-	}
-	pool, err := s.normalTaskPool(ctx, roundID, taskSlot{false, general}, mapCode)
-	if err != nil {
-		return err
-	}
-	for _, c := range chooseTaskSet(budget, maxTasks, ranks, pool) {
-		if err := s.insertDealtTask(ctx, roundID, participantID, c.ID, c.Rarity); err != nil {
+	if budget > 0 && maxTasks > 0 {
+		pool, err := s.normalTaskPool(ctx, roundID, taskSlot{false, general}, mapCode)
+		if err != nil {
 			return err
 		}
+		plan = append(plan, chooseTaskSet(budget, maxTasks, ranks, pool)...)
 	}
-	return nil
+	return s.dealTaskQueue(ctx, roundID, participantID, plan)
 }
 
-// insertDealtTask записывает выданное задание; очки фиксируются по редкости на момент раздачи.
-func (s *Store) insertDealtTask(ctx context.Context, roundID, participantID, taskID, rarity string) error {
+// insertDealtTask записывает выданное задание; очки фиксируются по редкости на момент раздачи. queuePos - место
+// в очереди заданий стороны, у задания на время пусто.
+func (s *Store) insertDealtTask(ctx context.Context, roundID, participantID, taskID, rarity string, queuePos *int) error {
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO round_bonus_tasks (round_id, participant_id, task_id, points) VALUES ($1, $2, $3, $4)
+		INSERT INTO round_bonus_tasks (round_id, participant_id, task_id, points, queue_pos) VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (round_id, participant_id, task_id) DO NOTHING`,
-		roundID, participantID, taskID, models.RarityPoints(rarity))
+		roundID, participantID, taskID, models.RarityPoints(rarity), queuePos)
 	return err
 }
 
@@ -479,7 +475,10 @@ const poolWhere = `
 	AND ` + taskFitsRound + `
 	AND ct.id NOT IN (
 	    SELECT rbt.task_id FROM round_bonus_tasks rbt JOIN rounds r2 ON r2.id = rbt.round_id
-	    WHERE r2.tournament_id = t.id)`
+	    WHERE r2.tournament_id = t.id
+	    UNION ALL
+	    SELECT q.task_id FROM round_task_queue q JOIN rounds r3 ON r3.id = q.round_id
+	    WHERE r3.tournament_id = t.id)`
 
 // pickTask - задание нужного вида из пула. Если задана onlyRarity - только этой редкости; иначе случайное из
 // желаемых редкостей (ranks), а если таких нет - ближайшей по редкости. Пустые ranks - любые.
