@@ -348,9 +348,9 @@ func (s *Store) StartNextRound(ctx context.Context, tournamentID string) (int, e
 	return rounds[next].Number, nil
 }
 
-// mapTasksEnabled - раздаются ли задания на карту. Пока выключено: вместо него выдаётся ещё одно общее
-// задание, а задания на время берутся только из общих. Включить - поменять на true.
-var mapTasksEnabled = false
+// mapTasksEnabled - раздаются ли задания на карту раунда: одно обычное гарантировано, остальные и задание на
+// время берутся из общих и картовых вместе. Если у раунда нет карты или заданий на неё, выдаются только общие.
+var mapTasksEnabled = true
 
 // Где может лежать задание слота относительно карт.
 const (
