@@ -1,7 +1,8 @@
 // Package syncer - двусторонняя синхронизация локального приложения организатора с сайтом.
 //
 // Каждая строка сравнивается по хешу трёх состояний: у приложения, на сайте и при прошлой
-// синхронизации. Так видно, кто изменил строку; если изменили обе стороны, побеждает сайт (кроме состояния оверлея).
+// синхронизации. Так видно, кто изменил строку; если изменили обе стороны, побеждает сайт: приложение само пишет
+// в часть таблиц (состояние оверлея, очки сторон), и это не правки организатора.
 // MMR, нашивки и пояс не переносятся: каждая сторона пересчитывает их по матчам сама.
 package syncer
 
@@ -79,7 +80,7 @@ var Tables = []Table{
 	{Name: "queue_matches", Winner: SideSite},
 	{Name: "queue_match_entries", Winner: SideSite},
 	{Name: "queue_events", Winner: SideSite, Serial: true},
-	{Name: "live_state", Winner: SideApp},
+	{Name: "live_state", Winner: SideSite},
 	{Name: "catalog_task_protocol_backup", Winner: SideApp, InitOnly: true, Optional: true},
 	{Name: "catalog_complications_bak_20260624", Winner: SideApp, InitOnly: true, NoPK: true, Optional: true},
 	{Name: "catalog_tasks_bak_20260624", Winner: SideApp, InitOnly: true, NoPK: true, Optional: true},
