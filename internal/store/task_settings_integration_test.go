@@ -47,7 +47,7 @@ func TestTaskDealSettingsIntegration(t *testing.T) {
 
 	for _, bad := range []store.TaskDealSettings{
 		{TimedEnabled: true, MaxPoints: 0, MaxTasks: 5}, {TimedEnabled: true, MaxPoints: 31, MaxTasks: 5},
-		{TimedEnabled: true, MaxPoints: 5, MaxTasks: 0}, {TimedEnabled: true, MaxPoints: 5, MaxTasks: 11},
+		{TimedEnabled: true, MaxPoints: 5, MaxTasks: 0}, {TimedEnabled: true, MaxPoints: 5, MaxTasks: 31},
 	} {
 		if err := st.SaveTaskDealSettings(ctx, bad); !errors.Is(err, store.ErrBadTaskSettings) {
 			t.Errorf("%+v: ждали отказ, получили %v", bad, err)

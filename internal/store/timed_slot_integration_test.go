@@ -13,8 +13,7 @@ import (
 	"github.com/battle-for-respect/backend/internal/store"
 )
 
-// У каждой стороны в раунде ровно одно задание на время и обычные на 5 очков; заданий на карту нет (отключены);
-// задание на время чужой карты не выпадает; задание на время засчитывается только владельцу. Запуск - как у TestMMRIntegration.
+// У каждой стороны в раунде ровно одно задание на время и обычные на 5 очков; задания чужой карты не выпадают; задание на время засчитывается только владельцу. Запуск - как у TestMMRIntegration.
 func TestTimedSlotIntegration(t *testing.T) {
 	url := os.Getenv("RESPECT_TEST_DB")
 	if url == "" {
@@ -64,11 +63,18 @@ func TestTimedSlotIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Обычное задание на карту раунда: пока задания на карту отключены, оно не выдаётся.
+	// Обычное задание на карту раунда может выпасть наравне с общими; такое же задание чужой карты - никогда.
 	if _, err := createTask(ctx, st, models.CatalogTask{
 		Name: prefix + "-map", Text: "Обычное, карта раунда", Points: 2, ValueType: models.ValueFixed, Kind: "pvpve",
 		Source: "official", Active: true, MapCodes: []string{roundMap},
 	}); err != nil {
+		t.Fatal(err)
+	}
+	foreignNormal, err := createTask(ctx, st, models.CatalogTask{
+		Name: prefix + "-foreign-normal", Text: "Обычное, чужая карта", Points: 2, ValueType: models.ValueFixed, Kind: "pvpve",
+		Source: "official", Active: true, MapCodes: []string{otherMap},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,11 +102,11 @@ func TestTimedSlotIntegration(t *testing.T) {
 		}
 		timed, normal := map[string]int{}, map[string]int{}
 		for _, d := range playOutTaskQueue(ctx, t, pool, st, tour.ID) {
-			if d.MapCode != "" {
-				t.Fatalf("выдано задание на карту %s, а они отключены", d.MapCode)
+			if d.MapCode != "" && d.MapCode != roundMap {
+				t.Fatalf("выдано задание карты %s на раунде карты %s", d.MapCode, roundMap)
 			}
-			if d.TaskID == foreign.ID {
-				t.Fatalf("задание на время чужой карты выпало на карте раунда")
+			if d.TaskID == foreign.ID || d.TaskID == foreignNormal.ID {
+				t.Fatalf("задание чужой карты выпало на карте раунда")
 			}
 			if d.Tag == models.TaskTagTimed {
 				timed[d.ParticipantID]++

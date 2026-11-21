@@ -24,7 +24,7 @@ func TestTaskSettingsAPI(t *testing.T) {
 	a.want(mod, "PUT", "/task-settings", map[string]any{"timedEnabled": false, "maxPoints": 5, "maxTasks": 5}, 403)
 
 	a.want(boss, "PUT", "/task-settings", map[string]any{"timedEnabled": false, "maxPoints": 0, "maxTasks": 5}, 400)
-	a.want(boss, "PUT", "/task-settings", map[string]any{"timedEnabled": false, "maxPoints": 5, "maxTasks": 11}, 400)
+	a.want(boss, "PUT", "/task-settings", map[string]any{"timedEnabled": false, "maxPoints": 5, "maxTasks": 31}, 400)
 	a.want(boss, "PUT", "/task-settings", map[string]any{"maxPoints": 5, "maxTasks": 5}, 400)
 
 	got := a.want(boss, "PUT", "/task-settings", map[string]any{"timedEnabled": false, "maxPoints": 8, "maxTasks": 3}, 200)

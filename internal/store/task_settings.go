@@ -13,11 +13,11 @@ import (
 // Пределы настроек раздачи: больше - уже не «задания раунда», а гонка за очками.
 const (
 	MaxTaskBudget = 30 // очков заданий на сторону в раунде
-	MaxTaskCount  = 10 // заданий на сторону в раунде
+	MaxTaskCount  = MaxTaskBudget // заданий на сторону в раунде: меньше одного очка на задание не бывает
 )
 
 // ErrBadTaskSettings - настройки раздачи вне допустимых пределов.
-var ErrBadTaskSettings = errors.New("очки - от 1 до 30, заданий - от 1 до 10")
+var ErrBadTaskSettings = errors.New("очки - от 1 до 30, заданий - от 1 до 30")
 
 const (
 	taskTimedKey  = "task_timed_enabled"
@@ -33,9 +33,10 @@ type TaskDealSettings struct {
 	MaxTasks     int  `json:"maxTasks"`  // сколько обычных заданий выдаётся самое большее
 }
 
-// DefaultTaskDealSettings - правила, пока организатор не задал свои.
+// DefaultTaskDealSettings - правила, пока организатор не задал свои. Количество заданий не ограничено:
+// набор ограничивает только лимит очков, и он сам подстраивается под любой лимит.
 func DefaultTaskDealSettings() TaskDealSettings {
-	return TaskDealSettings{TimedEnabled: true, MaxPoints: models.RoundTaskBudget, MaxTasks: models.RoundTaskBudget}
+	return TaskDealSettings{TimedEnabled: true, MaxPoints: models.RoundTaskBudget, MaxTasks: MaxTaskCount}
 }
 
 func (c TaskDealSettings) valid() bool {

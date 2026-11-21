@@ -32,7 +32,7 @@ func (s *Store) ListTournamentBonusTasks(ctx context.Context, tournamentID strin
 		JOIN catalog_tasks ct ON ct.id = rbt.task_id
 		JOIN rounds r ON r.id = rbt.round_id
 		WHERE r.tournament_id = $1
-		ORDER BY r.number, rbt.participant_id, (ct.tag <> 'timed'), cardinality(ct.map_codes) > 0, ct.text`, tournamentID)
+		ORDER BY r.number, rbt.participant_id, (ct.tag <> 'timed'), rbt.queue_pos NULLS LAST, ct.text`, tournamentID)
 	if err != nil {
 		return nil, err
 	}

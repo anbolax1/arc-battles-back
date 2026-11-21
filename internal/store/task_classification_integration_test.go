@@ -41,8 +41,7 @@ func TestTaskClassificationIntegration(t *testing.T) {
 	}
 	defer pool.Close()
 	st := store.New(pool)
-	// Формат и тип раунда проверяются на заданиях карты: в слот карты попадает единственное задание.
-	defer store.SetMapTasksEnabled(true)()
+	// Формат и тип раунда проверяются на задании своей карты: подходит ли оно раунду - значит, есть ли оно в пуле.
 
 	uniq := time.Now().UnixNano()
 	prefix := fmt.Sprintf("cls-%d", uniq)
@@ -98,7 +97,7 @@ func TestTaskClassificationIntegration(t *testing.T) {
 		t.Errorf("другой формат принят за дубль: %+v %v", o, err)
 	}
 
-	// Раздача: у каждой проверки своя карта, на ней одно задание - в слот карты выпадает оно или ничего.
+	// Допуск в пул раунда: у каждой проверки своя карта и на ней одно задание - оно в пуле или нет.
 	mapSeq := 0
 	totalRounds := 2 // сколько раундов в матче: бесплатный набор только у первого раунда матча из нескольких
 	check := func(taskFormat, roundType, matchMode, matchFormat string, roundNumber int, wantDealt bool) {
@@ -140,15 +139,13 @@ func TestTaskClassificationIntegration(t *testing.T) {
 		if _, err := pool.Exec(ctx, `UPDATE rounds SET map_code = $2 WHERE id = $1`, rd.ID, code); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.DealRoundTasks(ctx, rd.ID); err != nil {
+		inPool, err := store.TaskPoolIDs(ctx, st, rd.ID, code)
+		if err != nil {
 			t.Fatal(err)
 		}
-		var dealt bool
-		if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM round_bonus_tasks WHERE round_id = $1 AND task_id = $2)`, rd.ID, created.ID).Scan(&dealt); err != nil {
-			t.Fatal(err)
-		}
+		dealt := inPool[created.ID]
 		if dealt != wantDealt {
-			t.Errorf("%s: выдано=%v, ждали %v", name, dealt, wantDealt)
+			t.Errorf("%s: в пуле=%v, ждали %v", name, dealt, wantDealt)
 		}
 	}
 	const (

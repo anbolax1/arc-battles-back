@@ -29,7 +29,6 @@ func TestMultiMapTaskIntegration(t *testing.T) {
 	}
 	defer pool.Close()
 	st := store.New(pool)
-	defer store.SetMapTasksEnabled(true)()
 
 	// Свои карты без других заданий: в слот карты может выпасть только это задание. Карты выключены,
 	// чтобы не попасть в пики-баны.
@@ -73,31 +72,29 @@ func TestMultiMapTaskIntegration(t *testing.T) {
 			t.Fatalf("AddParticipant(%s): %v", name, err)
 		}
 	}
-	// Первый раунд - на второй карте задания: подходит любая карта из списка, а не только первая.
-	for i, code := range []string{maps[1], maps[0]} {
+	// Подходит любая карта из списка, а не только первая; на чужой карте задания в пуле нет.
+	foreign := fmt.Sprintf("mm_c_%d", uniq)
+	if _, err := pool.Exec(ctx, `INSERT INTO maps (code, name, sort_order, active) VALUES ($1, $1, 1002, false)`, foreign); err != nil {
+		t.Fatalf("карта %s: %v", foreign, err)
+	}
+	defer pool.Exec(ctx, `DELETE FROM maps WHERE code = $1`, foreign) //nolint:errcheck
+	for i, c := range []struct {
+		code string
+		want bool
+	}{{maps[1], true}, {maps[0], true}, {foreign, false}} {
 		rd, err := st.CreateRound(ctx, models.Round{TournamentID: tour.ID, Number: i + 1})
 		if err != nil {
 			t.Fatalf("CreateRound(%d): %v", i+1, err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE rounds SET map_code = $2 WHERE id = $1`, rd.ID, code); err != nil {
+		if _, err := pool.Exec(ctx, `UPDATE rounds SET map_code = $2 WHERE id = $1`, rd.ID, c.code); err != nil {
 			t.Fatalf("карта раунда %d: %v", i+1, err)
 		}
-		if err := st.DealRoundTasks(ctx, rd.ID); err != nil {
-			t.Fatalf("DealRoundTasks(%d): %v", i+1, err)
+		inPool, err := store.TaskPoolIDs(ctx, st, rd.ID, c.code)
+		if err != nil {
+			t.Fatalf("TaskPoolIDs(%d): %v", i+1, err)
 		}
-	}
-
-	dealt, err := st.ListTournamentBonusTasks(ctx, tour.ID)
-	if err != nil {
-		t.Fatalf("ListTournamentBonusTasks: %v", err)
-	}
-	var got []string
-	for _, d := range dealt {
-		if d.TaskID == task.ID {
-			got = append(got, fmt.Sprintf("раунд %d, карта %s", d.RoundNumber, d.MapCode))
+		if inPool[task.ID] != c.want {
+			t.Errorf("раунд %d, карта %s: задание в пуле = %v, want %v", i+1, c.code, inPool[task.ID], c.want)
 		}
-	}
-	if want := fmt.Sprintf("раунд 1, карта %s", maps[1]); len(got) != 1 || got[0] != want {
-		t.Errorf("задание выдано: %v, want [%s]", got, want)
 	}
 }

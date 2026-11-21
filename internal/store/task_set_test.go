@@ -86,3 +86,30 @@ func TestChooseTaskSet(t *testing.T) {
 		t.Errorf("пустой пул: %v", set)
 	}
 }
+
+// Лимит очков меняется без правок кода: набор всегда точно на лимит, а выбор игрока сохраняется,
+// пока количество заданий не ограничено (по умолчанию).
+func TestChooseTaskSetFollowsBudget(t *testing.T) {
+	full := rarityPool(map[string]int{"common": 12, "uncommon": 12, "rare": 12, "epic": 12, "legendary": 12})
+	for _, budget := range []int{3, 5, 10} {
+		for _, only := range [][]int32{{1}, {2}, {3}, {4}, {5}, {1, 5}, {2, 3}} {
+			for i := 0; i < 50; i++ {
+				set := chooseTaskSet(budget, MaxTaskCount, only, full)
+				if setPoints(set) != budget {
+					t.Fatalf("лимит %d, выбор %v: набор %v на %d очков", budget, only, set, setPoints(set))
+				}
+			}
+		}
+	}
+	// Только обычные при лимите 10: десять обычных, а не «любые редкости» вместо выбора игрока.
+	if set := chooseTaskSet(10, MaxTaskCount, []int32{1}, full); len(set) != 10 {
+		t.Errorf("обычные на 10 очков: %v", set)
+	}
+	// Примеры из правил на 5 очков: необычные - обычное + два необычных, эпические - обычное + эпическое.
+	if set := chooseTaskSet(5, MaxTaskCount, []int32{2}, full); len(set) != 3 {
+		t.Errorf("необычные на 5: %v", set)
+	}
+	if set := chooseTaskSet(5, MaxTaskCount, []int32{4}, full); len(set) != 2 {
+		t.Errorf("эпические на 5: %v", set)
+	}
+}

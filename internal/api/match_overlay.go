@@ -256,19 +256,10 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 	for _, p := range parts {
 		nameOf[p.ID] = p.Name
 	}
-	// Задания идут по одному: выполненное из очереди уходит с экрана, когда у стороны есть следующее.
-	// Последнее выполненное остаётся, чтобы конец очереди был виден.
-	lastInQueue := map[string]int{}
-	for _, task := range st.Tasks {
-		if task.RoundNumber == round && task.QueuePos != nil {
-			lastInQueue[task.ParticipantID] = max(lastInQueue[task.ParticipantID], *task.QueuePos)
-		}
-	}
+	// Задания идут по одному: выполненные остаются на экране с отметкой, рядом открыто текущее; закрытый остаток очереди
+	// в состоянии матча не появляется.
 	for _, task := range st.Tasks {
 		if task.RoundNumber != round {
-			continue
-		}
-		if task.QueuePos != nil && task.CompletedBy != nil && *task.QueuePos < lastInQueue[task.ParticipantID] {
 			continue
 		}
 		done := task.CompletedBy != nil && *task.CompletedBy == task.ParticipantID
