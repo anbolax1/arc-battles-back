@@ -104,7 +104,6 @@ func (s *Server) Router() http.Handler {
 		r.Get("/claim/{token}", s.handleClaimInfo)
 		r.Post("/claim/{token}", s.handleClaim)
 		r.Get("/rules", s.handleRules)
-		r.Get("/legendary", s.handleListLegendary)
 		r.Get("/maps", s.handleListMaps)
 		r.Get("/matches/current", s.handleCurrentMatch)
 		r.Get("/tournaments/{id}/match", s.handleGetMatch)
@@ -228,7 +227,6 @@ func (s *Server) Router() http.Handler {
 			r.Post("/tournaments/{id}/points", s.handleMatchPoints)
 			r.Post("/tournaments/{id}/knocks", s.handleMatchKnock)
 			r.Post("/tournaments/{id}/duel", s.handleMatchDuel)
-			r.Post("/tournaments/{id}/legendary", s.handleMatchLegendary)
 			r.Post("/tournaments/{id}/undo", s.handleMatchUndo)
 			r.Post("/round-bonus-tasks/{id}/mark", s.handleMarkTask)
 			r.Post("/round-bonus-tasks/{id}/reroll", s.handleRerollTask)
@@ -291,11 +289,6 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/catalog/complications/{id}", s.handleDeleteComplication)
 
 			// Легендарные контракты: каталог + отметка выполнения (навсегда) / возврат в пул.
-			r.Post("/catalog/legendary", s.handleCreateLegendary)
-			r.Patch("/catalog/legendary/{id}", s.handleUpdateLegendary)
-			r.Delete("/catalog/legendary/{id}", s.handleDeleteLegendary)
-			r.Post("/legendary/{id}/complete", s.handleCompleteLegendary)
-			r.Post("/legendary/{id}/reopen", s.handleUncompleteLegendary)
 
 			// Стартовые задания: пул (скрыт от публики), распределение по раундам, зачёт в эфире.
 			r.Get("/starter-tasks", s.handleListStarterTasks)

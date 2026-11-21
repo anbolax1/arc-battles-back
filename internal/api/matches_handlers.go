@@ -967,58 +967,6 @@ func (s *Server) handleMatchKnock(w http.ResponseWriter, r *http.Request) {
 	s.writeMatch(w, r, id, http.StatusOK)
 }
 
-// POST /api/tournaments/{id}/legendary {legendaryId, participantId, userId, round} - легендарка стороне в идущем
-// раунде, у команды 2×2 - её игроку userId; round - номер сыгранного раунда, когда исправляют завершённый матч.
-func (s *Server) handleMatchLegendary(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	var b struct {
-		LegendaryID   string `json:"legendaryId"`
-		ParticipantID string `json:"participantId"`
-		UserID        string `json:"userId"`
-		Round         int    `json:"round"`
-	}
-	if err := readJSON(r, &b); err != nil || b.LegendaryID == "" || b.ParticipantID == "" {
-		writeError(w, http.StatusBadRequest, "укажите легендарку и сторону")
-		return
-	}
-	rd, player, who, finished, ok := s.scoreSide(w, r, id, b.ParticipantID, b.UserID, b.Round)
-	if !ok {
-		return
-	}
-	leg, err := s.Store.GetLegendary(r.Context(), b.LegendaryID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "легендарка не найдена")
-		return
-	}
-	if err := s.Store.CompleteLegendaryInMatch(r.Context(), b.LegendaryID, id, b.ParticipantID, rd.Number, player); err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			writeError(w, http.StatusConflict, "эта легендарка уже выполнена")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	pid := b.ParticipantID
-	_ = s.Store.AddMatchLog(r.Context(), id, rd.Number, &pid, "legendary",
-		fmt.Sprintf("%s: легендарка «%s»", who, legendaryTitle(leg.Text)), leg.Points, map[string]any{
-			"type": "legendary", "legendaryId": b.LegendaryID,
-		})
-	if finished && !s.rescore(w, r, id) {
-		return
-	}
-	s.writeMatch(w, r, id, http.StatusOK)
-}
-
-// legendaryTitle - название легендарки из текста вида «Название»: условие.
-func legendaryTitle(text string) string {
-	if strings.HasPrefix(text, "«") {
-		if end := strings.Index(text, "»"); end > 0 {
-			return strings.TrimPrefix(text[:end], "«")
-		}
-	}
-	return text
-}
-
 // POST /api/tournaments/{id}/undo - отменить последнее действие журнала.
 func (s *Server) handleMatchUndo(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
