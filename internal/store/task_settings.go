@@ -119,6 +119,9 @@ func chooseTaskSet(budget, maxTasks int, ranks []int32, pool []poolTask) []poolT
 				fit = append(fit, set)
 			}
 		}
+		if tier.needOne {
+			fit = mostWanted(fit, wanted)
+		}
 		if len(fit) > 0 {
 			return takeSet(fit[rand.IntN(len(fit))], byCost)
 		}
@@ -132,6 +135,31 @@ func chooseTaskSet(budget, maxTasks int, ranks []int32, pool []poolTask) []poolT
 		}
 	}
 	return takeSet(set, byCost)
+}
+
+// mostWanted оставляет наборы, где больше всего очков набрано желаемыми редкостями: обычные только добирают
+// до лимита, а не заменяют выбор игрока (необычные при 5 очках - 1+2+2, а не 1+1+1+2).
+func mostWanted(sets [][]int, wanted []int) [][]int {
+	score := func(set []int) int {
+		sum := 0
+		for _, c := range set {
+			if slices.Contains(wanted, c) {
+				sum += c
+			}
+		}
+		return sum
+	}
+	best := -1
+	for _, set := range sets {
+		best = max(best, score(set))
+	}
+	var out [][]int
+	for _, set := range sets {
+		if score(set) == best {
+			out = append(out, set)
+		}
+	}
+	return out
 }
 
 // taskSets - все наборы стоимостей из allowed, дающие ровно budget не более чем из maxTasks заданий
