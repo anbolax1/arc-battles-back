@@ -522,7 +522,7 @@ func (s *Store) RerollTask(ctx context.Context, assignmentID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.Pool.Exec(ctx, `UPDATE round_bonus_tasks SET task_id = $2, points = $3 WHERE id = $1`,
+	_, err = s.Pool.Exec(ctx, `UPDATE round_bonus_tasks SET task_id = $2, points = $3, failed = false WHERE id = $1`,
 		assignmentID, next, models.RarityPoints(nextRarity))
 	return err
 }

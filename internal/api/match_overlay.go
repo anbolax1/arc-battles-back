@@ -270,7 +270,7 @@ func buildMatchLiveState(st models.MatchState, stored models.LiveState) models.L
 			}
 			c := models.LiveComplication{
 				Who: nameOf[task.ParticipantID], Text: overlayTaskText(task), ValueType: models.ValueFixed,
-				Reward: task.Points, Done: done, Tag: task.Tag, Rarity: task.Rarity,
+				Reward: task.Points, Done: done, Failed: task.Failed, Tag: task.Tag, Rarity: task.Rarity,
 			}
 			ls.Complications = append(ls.Complications, c)
 			ls.Complication = &c

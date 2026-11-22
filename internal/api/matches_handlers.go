@@ -777,6 +777,40 @@ func (s *Server) handleMarkTask(w http.ResponseWriter, r *http.Request) {
 	s.writeMatch(w, r, tid, http.StatusOK)
 }
 
+// POST /api/round-bonus-tasks/{id}/fail {failed} - отметка «провалено» у задания на время; очков не меняет.
+func (s *Server) handleFailTask(w http.ResponseWriter, r *http.Request) {
+	asgID := chi.URLParam(r, "id")
+	_, tid, err := s.Store.GetBonusAssignment(r.Context(), asgID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "задание не найдено")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if _, ok := s.matchFinished(w, r, tid); !ok {
+		return
+	}
+	var b struct {
+		Failed bool `json:"failed"`
+	}
+	if err := readJSON(r, &b); err != nil {
+		writeError(w, http.StatusBadRequest, "некорректный JSON")
+		return
+	}
+	err = s.Store.SetTaskFailed(r.Context(), asgID, b.Failed)
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "провалить можно только невыполненное задание на время")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeMatch(w, r, tid, http.StatusOK)
+}
+
 // POST /api/round-bonus-tasks/{id}/reroll - заменить невыполненное задание другим того же вида.
 func (s *Server) handleRerollTask(w http.ResponseWriter, r *http.Request) {
 	asgID := chi.URLParam(r, "id")

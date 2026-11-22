@@ -945,6 +945,7 @@ type LiveComplication struct {
 	Minutes   int    `json:"minutes,omitempty"` // минуты штрафа (= times); присутствует в JSON, чтобы переживать round-trip
 	Reward    int    `json:"reward,omitempty"`  // задание на время: награда за выполнение (+1); 0 - старый протокол-штраф
 	Done      bool   `json:"done,omitempty"`    // задание на время выполнено
+	Failed    bool   `json:"failed,omitempty"`  // задание на время провалено
 	Tag       string `json:"tag,omitempty"`     // тег задания на время
 	Rarity    string `json:"rarity,omitempty"`  // редкость задания
 }
@@ -1135,6 +1136,8 @@ type RoundBonusTask struct {
 	MapCode       string  `json:"mapCode,omitempty"` // задание на карту раунда
 	// Место в очереди обычных заданий стороны; пусто у задания на время, ручных и старых выдач.
 	QueuePos *int `json:"-"`
+	// Задание на время провалено: срок вышел, очков нет.
+	Failed bool `json:"failed,omitempty"`
 }
 
 // CatalogLegendary — легендарный контракт (глобальный пул, 10 баллов, выполним один раз навсегда).

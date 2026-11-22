@@ -11,7 +11,7 @@ import (
 // Контракты (бывш. бонусные задания). Владелец контракта = participant_id (кому выдан).
 // completed_by — кто фактически выполнил: владелец → +2 балла, противник → +1 балл, NULL → не выполнен.
 const rbtCols = `rbt.id, rbt.round_id, r.number, rbt.participant_id, rbt.task_id, ct.text, rbt.points, ct.value_type, ct.kind, rbt.times, rbt.completed_by,
-	rbt.completed_user_id, ct.name, ct.tag, ct.rarity, ` + dealtTaskMap + `, rbt.queue_pos`
+	rbt.completed_user_id, ct.name, ct.tag, ct.rarity, ` + dealtTaskMap + `, rbt.queue_pos, rbt.failed`
 
 // dealtTaskMap - карта выданного задания: у задания на картах это карта раунда, у общего - пусто.
 const dealtTaskMap = `CASE WHEN cardinality(ct.map_codes) > 0 THEN COALESCE(r.map_code, '') ELSE '' END`
@@ -20,7 +20,7 @@ func scanRoundBonusTask(row pgx.Row) (models.RoundBonusTask, error) {
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &t.QueuePos)
+		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &t.QueuePos, &t.Failed)
 	return t, err
 }
 
@@ -233,13 +233,30 @@ func (s *Store) MarkTask(ctx context.Context, id, by, userID string) (MarkResult
 	return res, nil
 }
 
+// SetTaskFailed отмечает задание на время проваленным (или снимает отметку). Выполненное задание провалить нельзя,
+// обычное - тоже: срок есть только у задания на время.
+func (s *Store) SetTaskFailed(ctx context.Context, id string, failed bool) error {
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE round_bonus_tasks rbt SET failed = $2
+		FROM catalog_tasks ct
+		WHERE rbt.id = $1 AND ct.id = rbt.task_id AND ct.tag = 'timed' AND (rbt.completed_by IS NULL OR NOT $2)`, id, failed)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrConflict
+	}
+	return nil
+}
+
 // SetTaskCompletedBy ставит исполнителя задания напрямую (для отмены из журнала); user - игрок команды 2×2.
 // Выполнено задание из очереди - сторона получает следующее; снят зачёт - лишнее открытое уходит обратно в очередь.
 func (s *Store) SetTaskCompletedBy(ctx context.Context, id string, by, user *string) error {
 	var roundID, ownerID string
 	var queuePos *int
 	err := s.Pool.QueryRow(ctx, `
-		UPDATE round_bonus_tasks SET completed_by = $2, completed_user_id = $3 WHERE id = $1
+		UPDATE round_bonus_tasks SET completed_by = $2, completed_user_id = $3,
+			failed = CASE WHEN $2::text IS NOT NULL THEN false ELSE failed END WHERE id = $1
 		RETURNING round_id, participant_id, queue_pos`, id, by, user).Scan(&roundID, &ownerID, &queuePos)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
@@ -293,7 +310,7 @@ func (s *Store) GetBonusAssignment(ctx context.Context, id string) (models.Round
 	var t models.RoundBonusTask
 	err := row.Scan(&t.ID, &t.RoundID, &t.RoundNumber, &t.ParticipantID, &t.TaskID,
 		&t.Text, &t.Points, &t.ValueType, &t.Kind, &t.Times, &t.CompletedBy,
-		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &t.QueuePos, &tournamentID)
+		&t.CompletedUser, &t.Name, &t.Tag, &t.Rarity, &t.MapCode, &t.QueuePos, &t.Failed, &tournamentID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, "", ErrNotFound
 	}

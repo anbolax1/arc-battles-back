@@ -157,11 +157,43 @@ func TestTimedSlotIntegration(t *testing.T) {
 	if _, err := st.MarkTask(ctx, timedAssign.ID, "opponent", ""); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("соперник отметил задание на время: %v", err)
 	}
+	// Провал: только у задания на время и только у невыполненного; выполнение снимает провал.
+	if err := st.SetTaskFailed(ctx, normalAssign.ID, true); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("обычное задание отмечено проваленным: %v", err)
+	}
+	if err := st.SetTaskFailed(ctx, timedAssign.ID, true); err != nil {
+		t.Fatalf("провал задания на время: %v", err)
+	}
+	if failed := taskFailed(ctx, t, st, lastTour, timedAssign.ID); !failed {
+		t.Errorf("провал не сохранился")
+	}
 	if _, err := st.MarkTask(ctx, timedAssign.ID, "owner", ""); err != nil {
 		t.Errorf("владелец не смог отметить задание на время: %v", err)
+	}
+	if taskFailed(ctx, t, st, lastTour, timedAssign.ID) {
+		t.Errorf("выполненное задание осталось проваленным")
+	}
+	if err := st.SetTaskFailed(ctx, timedAssign.ID, true); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("выполненное задание отмечено проваленным: %v", err)
 	}
 	if _, err := st.MarkTask(ctx, normalAssign.ID, "opponent", ""); err != nil {
 		t.Errorf("соперник не смог отметить обычное задание: %v", err)
 	}
 	_ = lastRound
+}
+
+// taskFailed - стоит ли у выдачи отметка «провалено».
+func taskFailed(ctx context.Context, t *testing.T, st *store.Store, tournamentID, id string) bool {
+	t.Helper()
+	all, err := st.ListTournamentBonusTasks(ctx, tournamentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range all {
+		if d.ID == id {
+			return d.Failed
+		}
+	}
+	t.Fatalf("выдача %s не найдена", id)
+	return false
 }

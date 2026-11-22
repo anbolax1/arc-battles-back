@@ -230,6 +230,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/tournaments/{id}/undo", s.handleMatchUndo)
 			r.Post("/round-bonus-tasks/{id}/mark", s.handleMarkTask)
 			r.Post("/round-bonus-tasks/{id}/reroll", s.handleRerollTask)
+			r.Post("/round-bonus-tasks/{id}/fail", s.handleFailTask)
 
 			r.Post("/tournaments", s.handleCreateTournament)
 			r.Patch("/tournaments/{id}", s.handleUpdateTournament)
